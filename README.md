@@ -3,6 +3,8 @@
 
 CLIFT 0.1 is in developpement terminal-based VJ software for live visual performances using ASCII art. Features 190 visual scenes, dual-deck mixing, effects, and WebSocket integration for live coding overlays. It's made by Crash Server (https://crashserver.fr) and released under MIT License. Feel free to improve and fix if you're interested. 
 
+Best used with Cool Retro Term or some other terminal. Even better with GPU support. Have fun :) 
+
 If you want to support : https://coff.ee/crashserver
 
 ## Features
