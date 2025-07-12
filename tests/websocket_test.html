@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CLIFT Live Coding Test Client</title>
+    <style>
+        body { font-family: monospace; background: #222; color: #0f0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .status { padding: 10px; margin: 10px 0; border: 1px solid #333; }
+        .connected { border-color: #0a0; background: #002; }
+        .disconnected { border-color: #a00; background: #200; }
+        textarea { width: 100%; height: 100px; background: #111; color: #0f0; border: 1px solid #333; padding: 10px; }
+        button { padding: 10px 20px; background: #333; color: #0f0; border: 1px solid #555; cursor: pointer; margin: 5px; }
+        button:hover { background: #444; }
+        .log { height: 200px; overflow-y: scroll; background: #111; border: 1px solid #333; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CLIFT Live Coding Test Client</h1>
+        
+        <div id="status" class="status disconnected">
+            Status: Disconnected
+        </div>
+        
+        <div>
+            <label>WebSocket URL:</label><br>
+            <input type="text" id="wsUrl" value="ws://localhost:8080" style="width: 300px; padding: 5px;">
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+        
+        <div>
+            <h3>Player 0 Code:</h3>
+            <textarea id="player0Code" placeholder="Enter live coding commands for Player 0...">
+synth :saw, note: :c4
+play :kick
+sleep 0.5
+            </textarea>
+            <button onclick="sendPlayerData(0)">Send Player 0 Data</button>
+        </div>
+        
+        <div>
+            <h3>Player 1 Code:</h3>
+            <textarea id="player1Code" placeholder="Enter live coding commands for Player 1...">
+live_loop :bass do
+  use_synth :fm
+  play :c2
+  sleep 1
+end
+            </textarea>
+            <button onclick="sendPlayerData(1)">Send Player 1 Data</button>
+        </div>
+        
+        <div>
+            <button onclick="sendHeartbeat()">Send Heartbeat</button>
+            <button onclick="clearLog()">Clear Log</button>
+        </div>
+        
+        <div>
+            <h3>Connection Log:</h3>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function setStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            if (connected) {
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = 'Status: Connected to CLIFT';
+            } else {
+                statusDiv.className = 'status disconnected';
+                statusDiv.textContent = 'Status: Disconnected';
+            }
+        }
+        
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = function(event) {
+                    log('Connected to CLIFT websocket server');
+                    setStatus(true);
+                };
+                
+                ws.onmessage = function(event) {
+                    log('Received: ' + event.data);
+                };
+                
+                ws.onclose = function(event) {
+                    log('Connection closed: ' + event.code + ' - ' + event.reason);
+                    setStatus(false);
+                    ws = null;
+                };
+                
+                ws.onerror = function(error) {
+                    log('WebSocket error: ' + error);
+                    setStatus(false);
+                };
+                
+            } catch (error) {
+                log('Connection failed: ' + error.message);
+                setStatus(false);
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                log('Disconnected from server');
+                setStatus(false);
+            }
+        }
+        
+        function sendPlayerData(playerNum) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to server');
+                return;
+            }
+            
+            const code = document.getElementById(`player${playerNum}Code`).value;
+            const lines = code.split('\n');
+            const lastExecuted = lines[lines.length - 1] || '';
+            
+            const message = {
+                player: playerNum,
+                code: code,
+                executed: lastExecuted,
+                active: true
+            };
+            
+            const jsonMessage = JSON.stringify(message);
+            ws.send(jsonMessage);
+            log(`Sent Player ${playerNum} data: ${jsonMessage}`);
+        }
+        
+        function sendHeartbeat() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Not connected to server');
+                return;
+            }
+            
+            const heartbeat = {
+                type: 'heartbeat',
+                timestamp: Date.now()
+            };
+            
+            ws.send(JSON.stringify(heartbeat));
+            log('Sent heartbeat');
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+        
+        // Auto-send data every 5 seconds when connected
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                // Alternate between players
+                const player = Math.floor(Date.now() / 5000) % 2;
+                sendPlayerData(player);
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
