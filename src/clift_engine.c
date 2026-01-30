@@ -32,9 +32,26 @@ typedef struct {
     float beat_intensity;
     float spectrum[64];
     bool valid;
+
+    // Advanced features (computed in audio thread)
+    float attack;              // Transient/onset detection (0-1)
+    float spectral_flux;       // Rate of spectral change (0-1)
+    float spectral_centroid;   // Brightness of sound (0-1)
+    float low_mid;             // 250-500Hz band (0-1)
+    float high_mid;            // 2-4kHz band (0-1)
+
+    // Energy history for buildup/drop detection
+    float energy_history[32];  // Rolling energy buffer
+    int energy_history_idx;
+    float energy_momentum;     // Positive = building up, negative = dropping (-1 to 1)
+    float buildup_intensity;   // Musical buildup detection (0-1)
+    float drop_intensity;      // Bass drop detection (0-1)
+
+    // Smoothed versions for visual continuity
+    float smooth_bass, smooth_mid, smooth_treble, smooth_volume;
 } AudioData;
 
-// Post effect types (15 total)
+// Post effect types (25 total)
 typedef enum {
     POST_NONE = 0,
     POST_GLOW,
@@ -51,6 +68,17 @@ typedef enum {
     POST_ECHO,
     POST_KALEIDOSCOPE,
     POST_DROSTE,
+    // New effects from JS version
+    POST_GLITCH,
+    POST_BLOCK_CORRUPTION,
+    POST_NOISE,
+    POST_PIXELATE,
+    POST_POSTERIZE,
+    POST_RGB_SPLIT,
+    POST_EXPLOSION,
+    POST_IMPLOSION,
+    POST_VHS_WOBBLE,
+    POST_BARREL,
     POST_COUNT
 } PostEffect;
 
@@ -166,31 +194,65 @@ typedef struct {
 
 #define MAX_PRESETS 20
 
-// Live coding display system
+// Live coding display system - 3 sources: SVDK, ZBDM, SERVER
+#define CODE_SOURCE_SVDK   0
+#define CODE_SOURCE_ZBDM   1
+#define CODE_SOURCE_SERVER 2
+#define NUM_CODE_SOURCES   3
+
 typedef struct {
-    char player_name[32];        // "Player 1", "Player 2", etc.
-    char current_code[512];      // Current code being typed/executed
-    char last_executed[256];     // Last executed line
+    char player_name[32];        // "SVDK", "ZBDM", "SERVER"
+    char current_code[4096];     // Current code being typed/executed
+    char last_executed[4096];    // Last executed line
     bool is_active;              // Whether player is currently coding
     float last_update_time;      // When last updated
+    bool is_fresh;               // Just received eval code (blink)
+    float fresh_time;            // When fresh started (for 1.5s blink)
+    float fade_time;             // When code should disappear (10s timeout)
 } LiveCodingPlayer;
 
 typedef struct {
-    bool enabled;                    // Websocket server enabled
-    int port;                       // Server port (default 8080)
-    LiveCodingPlayer players[2];    // Two live coding players
+    bool enabled;                    // Websocket enabled
+    int port;                       // Port (default 20000)
+    char host[64];                  // Host address
+    bool client_mode;               // true = connect TO server, false = BE a server
+    LiveCodingPlayer players[NUM_CODE_SOURCES]; // SVDK, ZBDM, SERVER
     float cpu_usage;                // Current CPU usage %
     float memory_usage;             // Current memory usage %
     bool display_overlay;           // Show overlay on visuals
     int overlay_opacity;            // Overlay transparency (0-100)
-    
-    // Websocket server internals
-    int server_socket;              // Server socket file descriptor
-    pthread_t server_thread;        // Server thread handle
-    bool server_running;            // Server thread status
+
+    // Beat sync from WebSocket (FoxDot Clock)
+    float ws_beat;                  // Current Clock.beat value from server
+    int ws_beat_count;              // Incremented on each BPM trigger
+    bool ws_beat_triggered;         // Flag: a beat just happened this frame
+    float ws_beat_time;             // Time of last beat trigger
+    float ws_beat_intensity;        // Pulse intensity (1.0 on trigger, decays)
+
+    // Musical context from FoxDot
+    char scale_name[32];            // e.g. "minor", "major"
+    char root_note[8];              // e.g. "E", "C#"
+    float chrono;                   // Elapsed time from FoxDot
+    bool server_active;             // FoxDot serverState
+
+    // Attack/chaos triggers
+    char attack_content[4096];      // Last attack code
+    float attack_time;              // When last attack was received
+    bool attack_active;             // Attack visual active
+
+    // Websocket internals
+    int server_socket;              // Socket file descriptor
+    pthread_t server_thread;        // Thread handle
+    bool server_running;            // Thread status
     int client_sockets[8];          // Connected client sockets (max 8)
     bool client_handshake_done[8];  // Track if handshake completed for each client
     int client_count;               // Number of connected clients
+    bool ws_connected;              // Client mode: connected to server
+
+    // Overlay rendering metadata (set by render_live_coding_overlay, used by vj_render_ui)
+    int overlay_start_y;
+    int overlay_num_lines;
+    int overlay_line_colors[24];
 } LiveCodingMonitor;
 
 #define MAX_PRESETS 20
@@ -222,8 +284,9 @@ typedef struct {
     char* output_buffer;
     char* temp_buffer;
     float* output_zbuffer;
-    
+
     int width, height;
+    int terminal_height;  // Full terminal height (for fullscreen mode)
     float time;
     float effect_time;
     
@@ -267,6 +330,83 @@ typedef struct {
     pthread_mutex_t audio_mutex;
     bool audio_thread_running;
     int selected_audio_source;  // For cycling through available sources
+
+    // ===== NEW FEATURES FROM JS VERSION =====
+
+    // Smooth crossfader (0.0 to 1.0)
+    float crossfader;           // 0.0 = full A, 1.0 = full B
+    int crossfade_mode;         // 0=manual, 1=smooth-fade, 2=oscillate, 3=audio-follow, 4=hardcut
+    float crossfade_target;     // Target value for smooth transitions
+    float crossfade_speed;      // Transition speed
+    float crossfade_phase;      // For oscillate mode
+
+    // Trails/Persistence
+    bool trails_enabled;
+    float trails_decay;         // 0.0-1.0, how fast trails fade
+    char* trails_buffer;        // Previous frame for trail effect
+
+    // Audio Grid overlay
+    bool audio_grid_enabled;
+    int audio_grid_mode;        // 0=bars, 1=wave, 2=circle
+
+    // Text Overlays
+    bool text_overlay_enabled;
+    float text_overlay_time;
+    int text_overlay_index;
+    int text_overlay_x, text_overlay_y;
+    float text_overlay_duration;
+
+    // Color Fills
+    bool color_fill_active;
+    int color_fill_x, color_fill_y;
+    int color_fill_w, color_fill_h;
+    int color_fill_color;
+    float color_fill_time;
+
+    // Grid Freeze
+    bool grid_freeze_enabled;
+    bool* grid_freeze_cells;    // Which cells are frozen
+    char* grid_freeze_buffer;   // Frozen content
+    int grid_freeze_divisions;
+
+    // Ikeda Mode (brutal B&W)
+    bool ikeda_mode;
+    float ikeda_threshold;
+
+    // Server Burst (red chaos)
+    bool server_burst_active;
+    float server_burst_intensity;
+    float server_burst_time;
+    float server_burst_duration;
+
+    // Zoom Punch
+    bool zoom_punch_active;
+    float zoom_punch_amount;
+    float zoom_punch_time;
+    float zoom_punch_decay;
+
+    // Grid Crop/Zoom
+    bool grid_crop_enabled;
+    int grid_crop_divisions;
+    float* grid_crop_zoom;      // Per-cell zoom levels
+
+    // 3D Overlay
+    bool overlay_3d_enabled;
+    int overlay_3d_primitive;   // 0=cube, 1=octahedron, 2=tetrahedron, etc.
+    float overlay_3d_rotation;
+    float overlay_3d_scale;
+
+    // Full Auto enhanced config
+    int auto_scene_freq;        // beats between scene changes
+    int auto_effect_freq;       // beats between effect changes
+    int auto_crossfade_freq;    // beats between crossfade changes
+    int auto_color_freq;        // beats between color changes
+    bool auto_trails;
+    bool auto_grid;
+    bool auto_text;
+    bool auto_3d;
+    int beat_count;             // Total beats counted
+    int active_charset;         // Current charset index for cycling (0-5)
 } CLIFTEngine;
 
 // Global engine
@@ -15350,6 +15490,270 @@ void post_effect_droste(char* buffer, int width, int height, float time) {
     }
 }
 
+// ============= NEW POST EFFECTS FROM JS VERSION =============
+
+// Glitch effect - random horizontal displacement
+void post_effect_glitch(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+
+    int num_glitches = 3 + (int)(sinf(time * 5.0f) * 2.0f);
+
+    for (int g = 0; g < num_glitches; g++) {
+        int glitch_y = rand() % height;
+        int glitch_height = 1 + rand() % 3;
+        int offset = (rand() % 11) - 5;  // -5 to +5 displacement
+
+        for (int dy = 0; dy < glitch_height && glitch_y + dy < height; dy++) {
+            int y = glitch_y + dy;
+            for (int x = 0; x < width; x++) {
+                int src_x = x - offset;
+                if (src_x >= 0 && src_x < width) {
+                    buffer[y * width + x] = vj.temp_buffer[y * width + src_x];
+                } else {
+                    // Random character for out-of-bounds
+                    const char* glitch_chars = "@#$%&*!?";
+                    buffer[y * width + x] = glitch_chars[rand() % 8];
+                }
+            }
+        }
+    }
+}
+
+// Block Corruption - random rectangular noise blocks
+void post_effect_block_corruption(char* buffer, int width, int height, float time) {
+    (void)time;
+    int num_blocks = 2 + rand() % 4;
+    const char* corruption_chars = "█▓▒░#@$%&*";
+    int num_chars = 10;
+
+    for (int b = 0; b < num_blocks; b++) {
+        int bx = rand() % (width - 4);
+        int by = rand() % (height - 2);
+        int bw = 3 + rand() % 8;
+        int bh = 1 + rand() % 3;
+
+        for (int y = by; y < by + bh && y < height; y++) {
+            for (int x = bx; x < bx + bw && x < width; x++) {
+                buffer[y * width + x] = corruption_chars[rand() % num_chars];
+            }
+        }
+    }
+}
+
+// Noise/Static - random character replacement
+void post_effect_noise(char* buffer, int width, int height, float time) {
+    float noise_amount = 0.1f + 0.1f * sinf(time * 3.0f);
+    const char* noise_chars = ".,:;!|/\\-_=+*#@";
+    int num_chars = 15;
+
+    for (int i = 0; i < width * height; i++) {
+        if ((float)rand() / RAND_MAX < noise_amount) {
+            buffer[i] = noise_chars[rand() % num_chars];
+        }
+    }
+}
+
+// Pixelate - group characters into blocks
+void post_effect_pixelate(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+
+    int block_size = 2 + (int)(sinf(time * 0.5f) * 1.5f);
+    if (block_size < 2) block_size = 2;
+
+    for (int by = 0; by < height; by += block_size) {
+        for (int bx = 0; bx < width; bx += block_size) {
+            // Sample center of block
+            int sample_x = bx + block_size / 2;
+            int sample_y = by + block_size / 2;
+            if (sample_x >= width) sample_x = width - 1;
+            if (sample_y >= height) sample_y = height - 1;
+
+            char sample = vj.temp_buffer[sample_y * width + sample_x];
+
+            // Fill block with sample
+            for (int y = by; y < by + block_size && y < height; y++) {
+                for (int x = bx; x < bx + block_size && x < width; x++) {
+                    buffer[y * width + x] = sample;
+                }
+            }
+        }
+    }
+}
+
+// Posterize - reduce character variety
+void post_effect_posterize(char* buffer, int width, int height, float time) {
+    (void)time;
+    const char* levels = " .:-=+*#%@";
+    int num_levels = 10;
+
+    for (int i = 0; i < width * height; i++) {
+        char c = buffer[i];
+        // Map character to brightness level
+        int brightness;
+        if (c == ' ') brightness = 0;
+        else if (c == '.' || c == ',') brightness = 1;
+        else if (c == ':' || c == '-') brightness = 2;
+        else if (c == '=' || c == '+') brightness = 3;
+        else if (c == '*' || c == 'o') brightness = 4;
+        else if (c == '#' || c == 'O') brightness = 5;
+        else if (c == '%' || c == '&') brightness = 6;
+        else if (c == '@' || c == 'M') brightness = 7;
+        else brightness = 5;
+
+        // Posterize to fewer levels
+        int posterized = (brightness / 3) * 3;
+        if (posterized >= num_levels) posterized = num_levels - 1;
+        buffer[i] = levels[posterized];
+    }
+}
+
+// RGB Split - horizontal offset for "color" separation effect
+void post_effect_rgb_split(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+
+    int offset = 1 + (int)(fabsf(sinf(time * 2.0f)) * 2.0f);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            char c = vj.temp_buffer[y * width + x];
+            if (c != ' ') {
+                // "Red" channel - shift left
+                if (x - offset >= 0) {
+                    char left = buffer[y * width + (x - offset)];
+                    if (left == ' ') buffer[y * width + (x - offset)] = '.';
+                }
+                // "Blue" channel - shift right
+                if (x + offset < width) {
+                    char right = buffer[y * width + (x + offset)];
+                    if (right == ' ') buffer[y * width + (x + offset)] = ',';
+                }
+            }
+        }
+    }
+}
+
+// Explosion - radial outward distortion from center
+void post_effect_explosion(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+    memset(buffer, ' ', width * height);
+
+    int cx = width / 2;
+    int cy = height / 2;
+    float explode_amount = 0.3f + 0.2f * sinf(time * 2.0f);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float dx = x - cx;
+            float dy = (y - cy) * 2.0f;  // Aspect correction
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            if (dist > 0.1f) {
+                // Push outward
+                float push = dist * explode_amount;
+                int src_x = cx + (int)((dx / dist) * (dist - push));
+                int src_y = cy + (int)(((dy / 2.0f) / dist) * (dist - push));
+
+                if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+                    buffer[y * width + x] = vj.temp_buffer[src_y * width + src_x];
+                }
+            }
+        }
+    }
+}
+
+// Implosion - radial inward distortion to center
+void post_effect_implosion(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+    memset(buffer, ' ', width * height);
+
+    int cx = width / 2;
+    int cy = height / 2;
+    float implode_amount = 0.3f + 0.2f * sinf(time * 2.0f);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float dx = x - cx;
+            float dy = (y - cy) * 2.0f;
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            if (dist > 0.1f) {
+                // Pull inward
+                float pull = dist * implode_amount;
+                int src_x = cx + (int)((dx / dist) * (dist + pull));
+                int src_y = cy + (int)(((dy / 2.0f) / dist) * (dist + pull));
+
+                if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+                    buffer[y * width + x] = vj.temp_buffer[src_y * width + src_x];
+                }
+            }
+        }
+    }
+}
+
+// VHS Wobble - wavy horizontal displacement like old VHS tapes
+void post_effect_vhs_wobble(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+
+    for (int y = 0; y < height; y++) {
+        // Create wobble offset for this scanline
+        float wobble = sinf(y * 0.3f + time * 5.0f) * 2.0f;
+        wobble += sinf(y * 0.7f + time * 3.0f) * 1.0f;
+        int offset = (int)wobble;
+
+        for (int x = 0; x < width; x++) {
+            int src_x = x - offset;
+            if (src_x >= 0 && src_x < width) {
+                buffer[y * width + x] = vj.temp_buffer[y * width + src_x];
+            } else {
+                buffer[y * width + x] = ' ';
+            }
+        }
+    }
+
+    // Add some noise lines
+    for (int i = 0; i < 2; i++) {
+        int noise_y = (int)(time * 20.0f + i * 13) % height;
+        for (int x = 0; x < width; x++) {
+            if (rand() % 3 == 0) {
+                buffer[noise_y * width + x] = "=-~"[rand() % 3];
+            }
+        }
+    }
+}
+
+// Barrel Distortion - fisheye/barrel lens effect
+void post_effect_barrel(char* buffer, int width, int height, float time) {
+    memcpy(vj.temp_buffer, buffer, width * height);
+    memset(buffer, ' ', width * height);
+
+    int cx = width / 2;
+    int cy = height / 2;
+    float strength = 0.3f + 0.1f * sinf(time);
+    float max_dist = sqrtf(cx * cx + cy * cy);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float dx = (x - cx) / (float)cx;
+            float dy = (y - cy) / (float)cy * 2.0f;  // Aspect correction
+
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > 0.01f) {
+                // Barrel distortion formula
+                float distorted = dist * (1.0f + strength * dist * dist);
+
+                int src_x = cx + (int)(dx / dist * distorted * cx);
+                int src_y = cy + (int)(dy / dist * distorted * cy / 2.0f);
+
+                if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+                    buffer[y * width + x] = vj.temp_buffer[src_y * width + src_x];
+                }
+            } else {
+                buffer[y * width + x] = vj.temp_buffer[cy * width + cx];
+            }
+        }
+    }
+}
+
 // ============= CLIFT ENGINE =============
 
 void apply_post_effect(char* buffer, PostEffect effect, int width, int height) {
@@ -15368,6 +15772,17 @@ void apply_post_effect(char* buffer, PostEffect effect, int width, int height) {
         case POST_ECHO: post_effect_echo(buffer, width, height, vj.effect_time); break;
         case POST_KALEIDOSCOPE: post_effect_kaleidoscope(buffer, width, height, vj.effect_time); break;
         case POST_DROSTE: post_effect_droste(buffer, width, height, vj.effect_time); break;
+        // New effects from JS version
+        case POST_GLITCH: post_effect_glitch(buffer, width, height, vj.effect_time); break;
+        case POST_BLOCK_CORRUPTION: post_effect_block_corruption(buffer, width, height, vj.effect_time); break;
+        case POST_NOISE: post_effect_noise(buffer, width, height, vj.effect_time); break;
+        case POST_PIXELATE: post_effect_pixelate(buffer, width, height, vj.effect_time); break;
+        case POST_POSTERIZE: post_effect_posterize(buffer, width, height, vj.effect_time); break;
+        case POST_RGB_SPLIT: post_effect_rgb_split(buffer, width, height, vj.effect_time); break;
+        case POST_EXPLOSION: post_effect_explosion(buffer, width, height, vj.effect_time); break;
+        case POST_IMPLOSION: post_effect_implosion(buffer, width, height, vj.effect_time); break;
+        case POST_VHS_WOBBLE: post_effect_vhs_wobble(buffer, width, height, vj.effect_time); break;
+        case POST_BARREL: post_effect_barrel(buffer, width, height, vj.effect_time); break;
         default: break;
     }
 }
@@ -15375,18 +15790,20 @@ void apply_post_effect(char* buffer, PostEffect effect, int width, int height) {
 void vj_init(int width, int height, bool start_hidden) {
     fprintf(stderr, "DEBUG: vj_init called with %dx%d\n", width, height);
     fflush(stderr);
-    
+
     vj.width = width;
-    vj.height = height - 10;  // Leave room for enhanced UI (10 lines)
+    vj.terminal_height = height;  // Store full terminal height
+    vj.height = height - 10;      // Default rendering height (leave room for UI)
     vj.time = 0.0f;
-    
+
     // Safety check for dimensions
-    if (vj.width <= 0 || vj.height <= 0) {
-        fprintf(stderr, "ERROR: Invalid dimensions in vj_init: %dx%d\n", vj.width, vj.height);
+    if (vj.width <= 0 || vj.terminal_height <= 0) {
+        fprintf(stderr, "ERROR: Invalid dimensions in vj_init: %dx%d\n", vj.width, vj.terminal_height);
         exit(1);
     }
-    
-    int buffer_size = vj.width * vj.height;
+
+    // Allocate buffers for full terminal size (to support fullscreen mode)
+    int buffer_size = vj.width * vj.terminal_height;
     fprintf(stderr, "DEBUG: Allocating buffers, size=%d (%dx%d)\n", buffer_size, vj.width, vj.height);
     fflush(stderr);
     
@@ -15503,7 +15920,7 @@ void vj_init(int width, int height, bool start_hidden) {
     
     // Initialize audio system
     vj.audio_enabled = false;
-    vj.audio_gain = 5.0f;
+    vj.audio_gain = 20.0f;
     vj.audio_smoothing = 0.1f;
     vj.audio_device_id = -1;  // Default device
     strcpy(vj.audio_device_name, "Default Audio Input");
@@ -15521,6 +15938,91 @@ void vj_init(int width, int height, bool start_hidden) {
     vj.audio_data.beat_intensity = 0.0f;
     vj.audio_data.valid = false;
     memset(vj.audio_data.spectrum, 0, sizeof(vj.audio_data.spectrum));
+
+    // ===== Initialize NEW FEATURES FROM JS VERSION =====
+
+    // Smooth crossfader
+    vj.crossfader = 0.0f;
+    vj.crossfade_mode = 0;  // Manual
+    vj.crossfade_target = 0.0f;
+    vj.crossfade_speed = 0.5f;
+    vj.crossfade_phase = 0.0f;
+
+    // Trails
+    vj.trails_enabled = false;
+    vj.trails_decay = 0.8f;
+    vj.trails_buffer = malloc(buffer_size);
+    if (vj.trails_buffer) memset(vj.trails_buffer, ' ', buffer_size);
+
+    // Audio Grid
+    vj.audio_grid_enabled = false;
+    vj.audio_grid_mode = 0;
+
+    // Text Overlays
+    vj.text_overlay_enabled = false;
+    vj.text_overlay_time = 0.0f;
+    vj.text_overlay_index = 0;
+    vj.text_overlay_x = 0;
+    vj.text_overlay_y = 0;
+    vj.text_overlay_duration = 0.5f;
+
+    // Color Fills
+    vj.color_fill_active = false;
+    vj.color_fill_x = 0;
+    vj.color_fill_y = 0;
+    vj.color_fill_w = 0;
+    vj.color_fill_h = 0;
+    vj.color_fill_color = 1;
+    vj.color_fill_time = 0.0f;
+
+    // Grid Freeze
+    vj.grid_freeze_enabled = false;
+    vj.grid_freeze_divisions = 4;
+    vj.grid_freeze_cells = malloc(16 * sizeof(bool));
+    vj.grid_freeze_buffer = malloc(buffer_size);
+    if (vj.grid_freeze_cells) memset(vj.grid_freeze_cells, 0, 16 * sizeof(bool));
+    if (vj.grid_freeze_buffer) memset(vj.grid_freeze_buffer, ' ', buffer_size);
+
+    // Ikeda Mode
+    vj.ikeda_mode = false;
+    vj.ikeda_threshold = 0.5f;
+
+    // Server Burst
+    vj.server_burst_active = false;
+    vj.server_burst_intensity = 0.0f;
+    vj.server_burst_time = 0.0f;
+    vj.server_burst_duration = 1.0f;
+
+    // Zoom Punch
+    vj.zoom_punch_active = false;
+    vj.zoom_punch_amount = 0.0f;
+    vj.zoom_punch_time = 0.0f;
+    vj.zoom_punch_decay = 0.9f;
+
+    // Grid Crop/Zoom
+    vj.grid_crop_enabled = false;
+    vj.grid_crop_divisions = 3;
+    vj.grid_crop_zoom = malloc(9 * sizeof(float));
+    if (vj.grid_crop_zoom) {
+        for (int i = 0; i < 9; i++) vj.grid_crop_zoom[i] = 1.0f;
+    }
+
+    // 3D Overlay
+    vj.overlay_3d_enabled = false;
+    vj.overlay_3d_primitive = 0;
+    vj.overlay_3d_rotation = 0.0f;
+    vj.overlay_3d_scale = 1.0f;
+
+    // Full Auto enhanced
+    vj.auto_scene_freq = 32;
+    vj.auto_effect_freq = 16;
+    vj.auto_crossfade_freq = 16;
+    vj.auto_color_freq = 8;
+    vj.auto_trails = true;
+    vj.auto_grid = true;
+    vj.auto_text = true;
+    vj.auto_3d = true;
+    vj.beat_count = 0;
 }
 
 // Audio input functions
@@ -15562,9 +16064,89 @@ void* audio_capture_thread(void* arg) {
                                        &vj.audio_data.treble, &vj.audio_data.volume);
                     
                     // Beat detection
-                    vj.audio_data.beat_detected = audio_detect_beat(vj.audio_data.volume, 
+                    vj.audio_data.beat_detected = audio_detect_beat(vj.audio_data.volume,
                                                                    &vj.audio_data.beat_intensity);
-                    
+
+                    // === Advanced audio features ===
+
+                    // 5-band analysis: low_mid and high_mid from spectrum
+                    float lm = 0, hm = 0;
+                    for (int i = 6; i < 12; i++) lm += vj.audio_data.spectrum[i];
+                    for (int i = 32; i < 48; i++) hm += vj.audio_data.spectrum[i];
+                    vj.audio_data.low_mid = fminf(1.0f, lm / 6.0f);
+                    vj.audio_data.high_mid = fminf(1.0f, hm / 16.0f);
+
+                    // Spectral centroid (brightness)
+                    float weighted_sum = 0, total_energy = 0;
+                    for (int i = 0; i < 64; i++) {
+                        weighted_sum += i * vj.audio_data.spectrum[i];
+                        total_energy += vj.audio_data.spectrum[i];
+                    }
+                    vj.audio_data.spectral_centroid = total_energy > 0.001f ?
+                        fminf(1.0f, (weighted_sum / total_energy) / 64.0f) : 0.0f;
+
+                    // Spectral flux (change from last frame)
+                    {
+                        static float prev_spectrum[64] = {0};
+                        float flux = 0;
+                        for (int i = 0; i < 64; i++) {
+                            float diff = vj.audio_data.spectrum[i] - prev_spectrum[i];
+                            if (diff > 0) flux += diff; // Only positive changes (onsets)
+                            prev_spectrum[i] = vj.audio_data.spectrum[i];
+                        }
+                        vj.audio_data.spectral_flux = fminf(1.0f, flux * 2.0f);
+                    }
+
+                    // Attack detection (sharp transient)
+                    {
+                        static float prev_volume = 0;
+                        float delta = vj.audio_data.volume - prev_volume;
+                        vj.audio_data.attack = fminf(1.0f, fmaxf(0.0f, delta * 5.0f));
+                        prev_volume = vj.audio_data.volume;
+                    }
+
+                    // Energy history for buildup/drop
+                    {
+                        int idx = vj.audio_data.energy_history_idx;
+                        vj.audio_data.energy_history[idx] = vj.audio_data.volume;
+                        vj.audio_data.energy_history_idx = (idx + 1) % 32;
+
+                        // Compute momentum (slope of energy over last 16 frames)
+                        float recent_avg = 0, older_avg = 0;
+                        for (int i = 0; i < 8; i++) {
+                            recent_avg += vj.audio_data.energy_history[(idx - i + 32) % 32];
+                            older_avg += vj.audio_data.energy_history[(idx - 8 - i + 32) % 32];
+                        }
+                        recent_avg /= 8.0f;
+                        older_avg /= 8.0f;
+                        vj.audio_data.energy_momentum = fminf(1.0f, fmaxf(-1.0f,
+                            (recent_avg - older_avg) * 5.0f));
+
+                        // Buildup = sustained positive momentum
+                        vj.audio_data.buildup_intensity = fmaxf(0.0f,
+                            vj.audio_data.energy_momentum);
+
+                        // Drop = sudden negative momentum + high bass
+                        vj.audio_data.drop_intensity = fmaxf(0.0f,
+                            -vj.audio_data.energy_momentum * vj.audio_data.bass * 2.0f);
+                        vj.audio_data.drop_intensity = fminf(1.0f, vj.audio_data.drop_intensity);
+                    }
+
+                    // Log-scale raw bands for perceptual loudness
+                    vj.audio_data.bass = log10f(1.0f + vj.audio_data.bass * 9.0f);
+                    vj.audio_data.mid = log10f(1.0f + vj.audio_data.mid * 9.0f);
+                    vj.audio_data.treble = log10f(1.0f + vj.audio_data.treble * 9.0f);
+                    vj.audio_data.volume = log10f(1.0f + vj.audio_data.volume * 9.0f);
+                    vj.audio_data.low_mid = log10f(1.0f + vj.audio_data.low_mid * 9.0f);
+                    vj.audio_data.high_mid = log10f(1.0f + vj.audio_data.high_mid * 9.0f);
+
+                    // Smoothed values (for visual continuity)
+                    float sm = 0.15f;
+                    vj.audio_data.smooth_bass = vj.audio_data.smooth_bass * (1.0f - sm) + vj.audio_data.bass * sm;
+                    vj.audio_data.smooth_mid = vj.audio_data.smooth_mid * (1.0f - sm) + vj.audio_data.mid * sm;
+                    vj.audio_data.smooth_treble = vj.audio_data.smooth_treble * (1.0f - sm) + vj.audio_data.treble * sm;
+                    vj.audio_data.smooth_volume = vj.audio_data.smooth_volume * (1.0f - sm) + vj.audio_data.volume * sm;
+
                     vj.audio_data.valid = true;
                 }
             } else {
@@ -15950,62 +16532,247 @@ void update_link_state(float current_time) {
     }
 }
 
+// ===== TRIGGER FUNCTIONS FOR NEW EFFECTS =====
+
+void trigger_zoom_punch(float amount) {
+    vj.zoom_punch_active = true;
+    vj.zoom_punch_amount = amount;
+    vj.zoom_punch_time = 0.0f;
+}
+
+void trigger_text_overlay(void) {
+    vj.text_overlay_enabled = true;
+    vj.text_overlay_time = 0.0f;
+    vj.text_overlay_index = rand() % 10;
+    vj.text_overlay_x = rand() % (vj.width - 8);
+    vj.text_overlay_y = rand() % vj.height;
+    vj.text_overlay_duration = 0.3f + (float)rand() / RAND_MAX * 0.5f;
+}
+
+void trigger_color_fill(void) {
+    vj.color_fill_active = true;
+    vj.color_fill_time = 0.0f;
+    vj.color_fill_w = vj.width / 4 + rand() % (vj.width / 2);
+    vj.color_fill_h = vj.height / 4 + rand() % (vj.height / 2);
+    vj.color_fill_x = rand() % (vj.width - vj.color_fill_w);
+    vj.color_fill_y = rand() % (vj.height - vj.color_fill_h);
+    vj.color_fill_color = 1 + rand() % 7;
+}
+
+void trigger_server_burst(float intensity) {
+    vj.server_burst_active = true;
+    vj.server_burst_intensity = intensity;
+    vj.server_burst_time = 0.0f;
+    vj.server_burst_duration = 0.5f + (float)rand() / RAND_MAX * 1.0f;
+}
+
+void trigger_grid_freeze(void) {
+    if (!vj.grid_freeze_cells) return;
+    vj.grid_freeze_enabled = true;
+    int div = vj.grid_freeze_divisions;
+    int total_cells = div * div;
+    // Randomly freeze 25-75% of cells
+    for (int i = 0; i < total_cells; i++) {
+        vj.grid_freeze_cells[i] = ((float)rand() / RAND_MAX) < 0.5f;
+    }
+}
+
+void toggle_grid_freeze(void) {
+    vj.grid_freeze_enabled = !vj.grid_freeze_enabled;
+    if (!vj.grid_freeze_enabled && vj.grid_freeze_cells) {
+        int div = vj.grid_freeze_divisions;
+        memset(vj.grid_freeze_cells, 0, div * div * sizeof(bool));
+    }
+}
+
+void randomize_crossfade_mode(void) {
+    vj.crossfade_mode = rand() % 5;  // 0-4: manual, smooth, oscillate, audio, hardcut
+    if (vj.crossfade_mode == 1) {
+        vj.crossfade_target = (float)rand() / RAND_MAX;
+        vj.crossfade_speed = 0.2f + (float)rand() / RAND_MAX * 0.8f;
+    } else if (vj.crossfade_mode == 2) {
+        vj.crossfade_speed = 0.5f + (float)rand() / RAND_MAX * 2.0f;
+    }
+}
+
 void update_full_auto_mode(float current_time) {
     if (!vj.full_auto_mode) return;
-    
-    // Check if it's time for a change
-    if (current_time - vj.last_auto_change >= vj.auto_change_interval) {
-        // Always change scenes AND colors together for maximum impact
+
+    float beat_duration = 60.0f / vj.bpm_system.bpm;
+
+    // Use WebSocket beat as primary clock if connected, else fallback to internal
+    static float last_beat_time = 0.0f;
+    bool on_beat = false;
+
+    if (vj.live_coding.ws_connected && vj.live_coding.ws_beat_triggered) {
+        // WebSocket BPM trigger IS the beat
+        on_beat = true;
+        vj.beat_count = vj.live_coding.ws_beat_count;
+        last_beat_time = current_time;
+    } else if (!vj.live_coding.ws_connected) {
+        // Fallback: internal BPM clock
+        if (current_time - last_beat_time >= beat_duration) {
+            on_beat = true;
+            last_beat_time = current_time;
+            vj.beat_count++;
+        }
+    }
+
+    if (!on_beat) return;
+
+    // ===== RATE LIMITER: max 3 major changes per beat =====
+    int changes_this_beat = 0;
+    #define MAX_CHANGES_PER_BEAT 3
+    #define PROB(pct) ((rand() % 100) < (pct))
+
+    // ===== SCENE CHANGES (every auto_scene_freq beats, 70% prob) =====
+    if (vj.beat_count % vj.auto_scene_freq == 0 && PROB(70) && changes_this_beat < MAX_CHANGES_PER_BEAT) {
+        changes_this_beat++;
         int change_mode = rand() % 3;
-        
+
         switch (change_mode) {
-            case 0: // Change deck A, set crossfade to show it
+            case 0: // Change deck A
                 randomize_deck_scene(&vj.deck_a);
                 randomize_deck_colors(&vj.deck_a);
                 randomize_deck_parameters(&vj.deck_a);
-                vj.crossfade_state = XFADE_FULL_A; // Show deck A
+                vj.crossfade_target = 0.0f;
+                vj.crossfade_mode = 1;  // Smooth fade to A
                 break;
-                
-            case 1: // Change deck B, set crossfade to show it  
+
+            case 1: // Change deck B
                 randomize_deck_scene(&vj.deck_b);
                 randomize_deck_colors(&vj.deck_b);
                 randomize_deck_parameters(&vj.deck_b);
-                vj.crossfade_state = XFADE_FULL_B; // Show deck B
+                vj.crossfade_target = 1.0f;
+                vj.crossfade_mode = 1;  // Smooth fade to B
                 break;
-                
-            case 2: // Change BOTH decks, mix them
+
+            case 2: // Change both
                 randomize_deck_scene(&vj.deck_a);
                 randomize_deck_colors(&vj.deck_a);
-                randomize_deck_parameters(&vj.deck_a);
                 randomize_deck_scene(&vj.deck_b);
                 randomize_deck_colors(&vj.deck_b);
-                randomize_deck_parameters(&vj.deck_b);
-                vj.crossfade_state = XFADE_MIX; // Show both mixed
+                vj.crossfade_mode = 2;  // Oscillate between them
                 break;
         }
-        
-        vj.last_auto_change = current_time;
-        
-        // Randomize next change interval (4-16 beats)
-        float beat_duration = 60.0f / vj.bpm_system.bpm;
-        float base_beats = 4.0f + (rand() / (float)RAND_MAX) * 12.0f; // 4-16 beats
-        vj.auto_change_interval = beat_duration * base_beats;
     }
-    
-    // FAST EFFECT CHANGES - Every beat
-    if (current_time - vj.last_effect_change >= vj.effect_change_interval) {
-        // Randomly change effects on both decks every beat
-        if (rand() % 3 == 0) { // 33% chance each beat
-            randomize_deck_post_effect(&vj.deck_a);
-        }
-        if (rand() % 3 == 0) { // 33% chance each beat  
-            randomize_deck_post_effect(&vj.deck_b);
-        }
-        
-        vj.last_effect_change = current_time;
-        float beat_duration = 60.0f / vj.bpm_system.bpm;
-        vj.effect_change_interval = beat_duration; // Every beat
+
+    // ===== EFFECT CHANGES (every auto_effect_freq beats, 65% prob) =====
+    if (vj.beat_count % vj.auto_effect_freq == 0 && PROB(65) && changes_this_beat < MAX_CHANGES_PER_BEAT) {
+        changes_this_beat++;
+        if (rand() % 2 == 0) randomize_deck_post_effect(&vj.deck_a);
+        if (rand() % 2 == 0) randomize_deck_post_effect(&vj.deck_b);
     }
+
+    // ===== CROSSFADE MODE CHANGES (50% prob) =====
+    if (vj.beat_count % vj.auto_crossfade_freq == 0 && PROB(50)) {
+        randomize_crossfade_mode();
+    }
+
+    // ===== COLOR CHANGES (50% prob) =====
+    if (vj.beat_count % vj.auto_color_freq == 0 && PROB(50) && changes_this_beat < MAX_CHANGES_PER_BEAT) {
+        changes_this_beat++;
+        if (rand() % 2 == 0) randomize_deck_colors(&vj.deck_a);
+        if (rand() % 2 == 0) randomize_deck_colors(&vj.deck_b);
+    }
+
+    // ===== ZOOM PUNCH ON BEAT (25% chance, audio-modulated) =====
+    if (vj.audio_enabled && vj.audio_data.beat_detected && PROB(25)) {
+        trigger_zoom_punch(0.2f + vj.audio_data.beat_intensity * 0.3f);
+    }
+
+    // ===== ATTACK CHAOS: transients trigger extra visual chaos =====
+    if (vj.audio_enabled && vj.audio_data.attack > 0.6f) {
+        if (PROB(40) && !vj.ikeda_mode) {
+            vj.ikeda_mode = true;
+            vj.ikeda_threshold = 0.3f + vj.audio_data.attack * 0.3f;
+        }
+        if (PROB(30) && !vj.grid_freeze_enabled) {
+            trigger_grid_freeze();
+        }
+        if (PROB(20) && !vj.server_burst_active) {
+            trigger_server_burst(0.5f + vj.audio_data.attack * 0.5f);
+        }
+    }
+
+    // ===== DROP IMPACT: bass drops trigger heavy chaos =====
+    if (vj.audio_enabled && vj.audio_data.drop_intensity > 0.5f) {
+        if (PROB(50)) trigger_zoom_punch(0.3f + vj.audio_data.drop_intensity * 0.4f);
+        if (PROB(30)) trigger_color_fill();
+    }
+
+    // ===== TRAILS TOGGLE (every 32 beats, 30% chance) =====
+    if (vj.auto_trails && vj.beat_count % 32 == 0 && PROB(30)) {
+        vj.trails_enabled = !vj.trails_enabled;
+        if (vj.trails_enabled) {
+            vj.trails_decay = 0.7f + (float)rand() / RAND_MAX * 0.25f;
+        }
+    }
+
+    // ===== AUDIO GRID TOGGLE (every 32 beats, 25% chance) =====
+    if (vj.auto_grid && vj.beat_count % 32 == 0 && PROB(25)) {
+        vj.audio_grid_enabled = !vj.audio_grid_enabled;
+    }
+
+    // ===== CHARACTER SET CYCLING (every 32 beats, 35% chance) =====
+    if (vj.beat_count % 32 == 0 && PROB(35)) {
+        static int charset_cycle = 0;
+        charset_cycle = (charset_cycle + 1) % 6;
+        vj.active_charset = charset_cycle;
+    }
+
+    // ===== TEXT OVERLAY (every 8 beats, 15% chance) =====
+    if (vj.auto_text && vj.beat_count % 8 == 0 && PROB(15)) {
+        trigger_text_overlay();
+    }
+
+    // ===== COLOR FILL (every 16 beats, 20% chance) =====
+    if (vj.beat_count % 16 == 0 && PROB(20)) {
+        trigger_color_fill();
+    }
+
+    // ===== 3D OVERLAY TOGGLE (every 64 beats, 15% chance) =====
+    if (vj.auto_3d && vj.beat_count % 64 == 0 && PROB(15)) {
+        vj.overlay_3d_enabled = !vj.overlay_3d_enabled;
+        if (vj.overlay_3d_enabled) {
+            vj.overlay_3d_scale = 0.5f + (float)rand() / RAND_MAX * 1.5f;
+        }
+    }
+
+    // ===== IKEDA MODE (every 64 beats, 10% chance) =====
+    if (vj.beat_count % 64 == 0 && PROB(10)) {
+        vj.ikeda_mode = true;
+        vj.ikeda_threshold = 0.3f + (float)rand() / RAND_MAX * 0.4f;
+    }
+    if (vj.ikeda_mode && vj.beat_count % 4 == 0 && PROB(50)) {
+        vj.ikeda_mode = false;
+    }
+
+    // ===== SERVER BURST (every 64 beats, 10% chance) =====
+    if (vj.beat_count % 64 == 0 && PROB(10)) {
+        trigger_server_burst(0.7f + (float)rand() / RAND_MAX * 0.3f);
+    }
+
+    // ===== GRID CROP/ZOOM (every 32 beats, 15% chance) =====
+    if (vj.beat_count % 32 == 0 && PROB(15)) {
+        vj.grid_crop_enabled = !vj.grid_crop_enabled;
+        if (vj.grid_crop_enabled && vj.grid_crop_zoom) {
+            for (int i = 0; i < 9; i++) {
+                vj.grid_crop_zoom[i] = 0.5f + (float)rand() / RAND_MAX * 1.5f;
+            }
+        }
+    }
+
+    // ===== GRID FREEZE (every 48 beats, 10% chance) =====
+    if (vj.beat_count % 48 == 0 && PROB(10)) {
+        trigger_grid_freeze();
+    }
+    if (vj.grid_freeze_enabled && vj.beat_count % 8 == 0 && PROB(50)) {
+        toggle_grid_freeze();
+    }
+
+    #undef MAX_CHANGES_PER_BEAT
+    #undef PROB
 }
 
 void vj_update(float dt) {
@@ -16026,6 +16793,14 @@ void vj_update(float dt) {
     
     // Update live coding monitor
     update_cpu_usage();
+
+    // Decay WebSocket beat intensity
+    if (vj.live_coding.ws_beat_intensity > 0.0f) {
+        vj.live_coding.ws_beat_intensity -= dt * 3.0f; // Decay over ~0.33s
+        if (vj.live_coding.ws_beat_intensity < 0.0f) vj.live_coding.ws_beat_intensity = 0.0f;
+    }
+    // Clear beat trigger flag (consumed per frame)
+    vj.live_coding.ws_beat_triggered = false;
     
     for (int i = 0; i < 8; i++) {
         param_update(&vj.deck_a.params[i], dt);
@@ -16034,8 +16809,15 @@ void vj_update(float dt) {
 }
 
 void vj_render() {
+    // Adjust rendering height based on UI visibility
+    if (vj.hide_ui) {
+        vj.height = vj.terminal_height;  // Use full terminal height when UI is hidden
+    } else {
+        vj.height = vj.terminal_height - 10;  // Leave room for UI (10 lines)
+    }
+
     CLIFTDeck* decks[] = {&vj.deck_a, &vj.deck_b};
-    
+
     for (int d = 0; d < 2; d++) {
         CLIFTDeck* deck = decks[d];
         if (!deck->active) continue;
@@ -16054,151 +16836,154 @@ void vj_render() {
             deck->scene_id = 0;  // Reset to safe scene
         }
         
+        // Audio pointer for all scenes
+        AudioData* aud = vj.audio_enabled ? &vj.audio_data : NULL;
+
         // Render scene
         switch (deck->scene_id) {
             // Basic scenes (0-9)
-            case 0: scene_audio_bars(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 1: scene_cube(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 2: scene_dna_helix(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 3: scene_particle_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 4: scene_torus(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 5: scene_fractal_tree(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 6: scene_wave_mesh(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 7: scene_sphere(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 8: scene_spirograph(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 9: scene_matrix_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 0: scene_audio_bars(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 1: scene_cube(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 2: scene_dna_helix(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 3: scene_particle_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 4: scene_torus(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 5: scene_fractal_tree(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 6: scene_wave_mesh(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 7: scene_sphere(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 8: scene_spirograph(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 9: scene_matrix_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Geometric scenes (10-19)
-            case 10: scene_tunnels(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 11: scene_kaleidoscope(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 12: scene_mandala(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 13: scene_sierpinski(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 14: scene_hexagon_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 15: scene_tessellations(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 16: scene_voronoi_cells(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 17: scene_sacred_geometry(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 18: scene_polyhedra(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 19: scene_maze_generator(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 10: scene_tunnels(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 11: scene_kaleidoscope(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 12: scene_mandala(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 13: scene_sierpinski(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 14: scene_hexagon_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 15: scene_tessellations(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 16: scene_voronoi_cells(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 17: scene_sacred_geometry(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 18: scene_polyhedra(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 19: scene_maze_generator(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Organic scenes (20-29)
-            case 20: scene_fire_simulation(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 21: scene_water_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 22: scene_lightning(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 23: scene_plasma_clouds(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 24: scene_galaxy_spiral(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 25: scene_tree_of_life(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 26: scene_cellular_automata(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 27: scene_flocking_birds(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 28: scene_wind_patterns(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 29: scene_neural_networks(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 20: scene_fire_simulation(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 21: scene_water_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 22: scene_lightning(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 23: scene_plasma_clouds(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 24: scene_galaxy_spiral(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 25: scene_tree_of_life(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 26: scene_cellular_automata(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 27: scene_flocking_birds(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 28: scene_wind_patterns(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 29: scene_neural_networks(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Text/Code scenes (30-39)
-            case 30: scene_matrix_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 31: scene_ascii_art_generator(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 32: scene_code_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 33: scene_binary_stream(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 34: scene_terminal_glitch(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 35: scene_syntax_highlighting(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 36: scene_data_visualization(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 37: scene_network_nodes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 38: scene_system_monitor(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 39: scene_command_line(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 30: scene_matrix_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 31: scene_ascii_art_generator(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 32: scene_code_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 33: scene_binary_stream(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 34: scene_terminal_glitch(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 35: scene_syntax_highlighting(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 36: scene_data_visualization(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 37: scene_network_nodes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 38: scene_system_monitor(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 39: scene_command_line(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Abstract scenes (40-49)
-            case 40: scene_noise_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 41: scene_swarm_intelligence(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 42: scene_fractal_zoom(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 43: scene_morphing_shapes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 44: scene_glitch_corruption(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 45: scene_energy_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 46: scene_digital_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 47: scene_psychedelic_patterns(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 48: scene_quantum_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 49: scene_abstract_flow(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 40: scene_noise_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 41: scene_swarm_intelligence(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 42: scene_fractal_zoom(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 43: scene_morphing_shapes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 44: scene_glitch_corruption(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 45: scene_energy_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 46: scene_digital_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 47: scene_psychedelic_patterns(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 48: scene_quantum_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 49: scene_abstract_flow(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Infinite Tunnel scenes (50-59)
-            case 50: scene_spiral_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 51: scene_hex_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 52: scene_star_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 53: scene_wormhole(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 54: scene_cyber_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 55: scene_ring_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 56: scene_matrix_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 57: scene_speed_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 58: scene_pulse_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 59: scene_vortex_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 50: scene_spiral_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 51: scene_hex_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 52: scene_star_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 53: scene_wormhole(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 54: scene_cyber_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 55: scene_ring_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 56: scene_matrix_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 57: scene_speed_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 58: scene_pulse_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 59: scene_vortex_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Nature scenes (60-69)
-            case 60: scene_ocean_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 61: scene_rain_storm(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 62: scene_infinite_forest(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 63: scene_growing_trees(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 64: scene_mountain_range(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 65: scene_aurora_borealis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 66: scene_flowing_river(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 67: scene_desert_dunes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 68: scene_coral_reef(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 69: scene_butterfly_garden(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 60: scene_ocean_waves(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 61: scene_rain_storm(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 62: scene_infinite_forest(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 63: scene_growing_trees(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 64: scene_mountain_range(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 65: scene_aurora_borealis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 66: scene_flowing_river(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 67: scene_desert_dunes(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 68: scene_coral_reef(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 69: scene_butterfly_garden(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Explosion scenes (70-79)
-            case 70: scene_nuclear_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 71: scene_building_collapse(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 72: scene_meteor_impact(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 73: scene_chain_explosions(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 74: scene_volcanic_eruption(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 75: scene_shockwave_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 76: scene_glass_shatter(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 77: scene_demolition_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 78: scene_supernova_burst(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 79: scene_plasma_discharge(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 70: scene_nuclear_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 71: scene_building_collapse(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 72: scene_meteor_impact(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 73: scene_chain_explosions(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 74: scene_volcanic_eruption(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 75: scene_shockwave_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 76: scene_glass_shatter(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 77: scene_demolition_blast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 78: scene_supernova_burst(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 79: scene_plasma_discharge(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // City scenes (80-89)
-            case 80: scene_cyberpunk_city(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 81: scene_city_lights(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 82: scene_skyscraper_forest(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 83: scene_urban_decay(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 84: scene_future_metropolis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 85: scene_city_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 86: scene_digital_city(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 87: scene_city_flythrough(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 88: scene_neon_districts(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 89: scene_urban_canyon(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 80: scene_cyberpunk_city(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 81: scene_city_lights(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 82: scene_skyscraper_forest(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 83: scene_urban_decay(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 84: scene_future_metropolis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 85: scene_city_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 86: scene_digital_city(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 87: scene_city_flythrough(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 88: scene_neon_districts(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 89: scene_urban_canyon(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Freestyle scenes (90-99)
-            case 90: scene_black_hole(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 91: scene_quantum_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 92: scene_dimensional_rift(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 93: scene_alien_landscape(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 94: scene_robot_factory(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 95: scene_time_vortex(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 96: scene_glitch_world(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 97: scene_neural_network(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 98: scene_cosmic_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 99: scene_reality_glitch(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 90: scene_black_hole(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 91: scene_quantum_field(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 92: scene_dimensional_rift(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 93: scene_alien_landscape(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 94: scene_robot_factory(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 95: scene_time_vortex(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 96: scene_glitch_world(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 97: scene_neural_network(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 98: scene_cosmic_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 99: scene_reality_glitch(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Human scenes (100-109)
-            case 100: scene_human_walker(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 101: scene_dance_party(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 102: scene_martial_arts(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 103: scene_human_pyramid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 104: scene_yoga_flow(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 105: scene_sports_stadium(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 106: scene_robot_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 107: scene_crowd_wave(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 108: scene_mirror_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 109: scene_human_evolution(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            
+            case 100: scene_human_walker(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 101: scene_dance_party(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 102: scene_martial_arts(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 103: scene_human_pyramid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 104: scene_yoga_flow(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 105: scene_sports_stadium(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 106: scene_robot_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 107: scene_crowd_wave(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 108: scene_mirror_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 109: scene_human_evolution(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             // Warfare scenes (110-119)
-            case 110: scene_fighter_squadron(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 111: scene_drone_swarm(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 112: scene_strategic_bombing(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 113: scene_dogfight(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 114: scene_helicopter_assault(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 115: scene_stealth_mission(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 116: scene_carrier_strike(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 117: scene_missile_defense(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 118: scene_recon_drone(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
-            case 119: scene_air_command(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL); break;
+            case 110: scene_fighter_squadron(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 111: scene_drone_swarm(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 112: scene_strategic_bombing(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 113: scene_dogfight(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 114: scene_helicopter_assault(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 115: scene_stealth_mission(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 116: scene_carrier_strike(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 117: scene_missile_defense(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 118: scene_recon_drone(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 119: scene_air_command(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
             
             // Revolution & Eyes scenes (120-129)
             case 120: scene_120(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params); break;
@@ -16273,16 +17058,16 @@ void vj_render() {
             case 179: scene_revolt_victory_dance(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params); break;
             
             // Audio reactive scenes (180-189)
-            case 180: scene_audio_reactive_cubes(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 181: scene_audio_flash_strobes(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 182: scene_audio_explosions(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 183: scene_audio_wave_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 184: scene_audio_spectrum_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 185: scene_audio_reactive_particles(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 186: scene_audio_pulse_rings(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 187: scene_audio_waveform_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 188: scene_audio_matrix_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
-            case 189: scene_audio_reactive_fractals(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, vj.audio_enabled ? &vj.audio_data : NULL); break;
+            case 180: scene_audio_reactive_cubes(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 181: scene_audio_flash_strobes(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 182: scene_audio_explosions(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 183: scene_audio_wave_tunnel(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 184: scene_audio_spectrum_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 185: scene_audio_reactive_particles(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 186: scene_audio_pulse_rings(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 187: scene_audio_waveform_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 188: scene_audio_matrix_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
+            case 189: scene_audio_reactive_fractals(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
                 
             default:
                 // Fallback to audio bars for any undefined scenes
@@ -16292,33 +17077,576 @@ void vj_render() {
         
         // Apply post effect
         apply_post_effect(deck->buffer, deck->post_effect, vj.width, vj.height);
+
+        // === AUDIO-REACTIVE POST-FX MODULATION ===
+        // Like the JS applyAudioReactiveModulation: audio drives extra post-FX on every deck
+        if (vj.audio_enabled && vj.audio_data.valid) {
+            AudioData* a = &vj.audio_data;
+            int buf_sz = vj.width * vj.height;
+
+            // Log-scale audio for perceptually correct loudness
+            float log_bass = logf(1.0f + a->smooth_bass * 9.0f) / logf(10.0f);
+            float log_mid = logf(1.0f + a->smooth_mid * 9.0f) / logf(10.0f);
+            float log_treble = logf(1.0f + a->smooth_treble * 9.0f) / logf(10.0f);
+
+            // BASS → GLOW: Expand characters outward on bass
+            if (log_bass > 0.3f) {
+                float glow_intensity = (log_bass - 0.3f) * 1.4f; // 0-1 range
+                int glow_count = (int)(glow_intensity * buf_sz * 0.03f);
+                for (int g = 0; g < glow_count; g++) {
+                    int x = rand() % (vj.width - 2) + 1;
+                    int y = rand() % (vj.height - 2) + 1;
+                    int idx = y * vj.width + x;
+                    if (deck->buffer[idx] != ' ') {
+                        // Spread to adjacent empty cells
+                        int dx = (rand() % 3) - 1;
+                        int dy = (rand() % 3) - 1;
+                        int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < vj.width && ny >= 0 && ny < vj.height) {
+                            int ni = ny * vj.width + nx;
+                            if (deck->buffer[ni] == ' ') {
+                                deck->buffer[ni] = ".-:+"[rand() % 4];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // MID → SCANLINES: Thin out every Nth row based on mid
+            if (log_mid > 0.4f) {
+                int skip = 6 - (int)(log_mid * 4.0f); // 2-6 rows
+                if (skip < 2) skip = 2;
+                for (int y = 0; y < vj.height; y++) {
+                    if (y % skip == 0) {
+                        for (int x = 0; x < vj.width; x++) {
+                            char c = deck->buffer[y * vj.width + x];
+                            if (c != ' ' && rand() % 3 == 0) {
+                                deck->buffer[y * vj.width + x] = '-';
+                            }
+                        }
+                    }
+                }
+            }
+
+            // TREBLE → NOISE: Sprinkle random chars on high treble
+            if (log_treble > 0.3f) {
+                int noise_count = (int)((log_treble - 0.3f) * 30.0f);
+                for (int n = 0; n < noise_count; n++) {
+                    int idx = rand() % buf_sz;
+                    if (deck->buffer[idx] != ' ') {
+                        deck->buffer[idx] = ".:;!|/*#"[rand() % 8];
+                    }
+                }
+            }
+
+            // BEAT → CHROMATIC SHIFT: On beat, shift characters horizontally
+            if (a->beat_detected && a->beat_intensity > 0.4f) {
+                int shift = 1 + (int)(a->beat_intensity * 2.0f);
+                int num_lines = (int)(a->beat_intensity * vj.height * 0.1f);
+                for (int l = 0; l < num_lines; l++) {
+                    int y = rand() % vj.height;
+                    if (rand() % 2) {
+                        // Shift right
+                        for (int x = vj.width - 1; x >= shift; x--)
+                            deck->buffer[y * vj.width + x] = deck->buffer[y * vj.width + x - shift];
+                    } else {
+                        // Shift left
+                        for (int x = 0; x < vj.width - shift; x++)
+                            deck->buffer[y * vj.width + x] = deck->buffer[y * vj.width + x + shift];
+                    }
+                }
+            }
+
+            // ATTACK → WAVE WARP: On sharp transient, warp rows sinusoidally
+            if (a->attack > 0.4f) {
+                float warp_amount = a->attack * 3.0f;
+                for (int y = 0; y < vj.height; y++) {
+                    int offset = (int)(sinf(y * 0.5f + vj.time * 10.0f) * warp_amount);
+                    if (offset != 0 && abs(offset) < vj.width / 2) {
+                        char temp[512];
+                        int w = vj.width < 512 ? vj.width : 511;
+                        memcpy(temp, &deck->buffer[y * vj.width], w);
+                        for (int x = 0; x < w; x++) {
+                            int src = x - offset;
+                            if (src >= 0 && src < w) {
+                                deck->buffer[y * vj.width + x] = temp[src];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SPECTRAL FLUX → GLITCH: Fast-changing sound corrupts blocks
+            if (a->spectral_flux > 0.4f) {
+                int block_count = (int)((a->spectral_flux - 0.4f) * 8.0f);
+                for (int b = 0; b < block_count; b++) {
+                    int bx = rand() % (vj.width - 4);
+                    int by = rand() % (vj.height - 2);
+                    int bw = 3 + rand() % 6;
+                    int bh = 1 + rand() % 3;
+                    for (int dy = 0; dy < bh && by + dy < vj.height; dy++) {
+                        for (int dx = 0; dx < bw && bx + dx < vj.width; dx++) {
+                            int idx = (by + dy) * vj.width + (bx + dx);
+                            deck->buffer[idx] = "#@$%&!?"[rand() % 7];
+                        }
+                    }
+                }
+            }
+        }
     }
     
-    // Simple 3-state crossfade mixing
+    // ===== SMOOTH CROSSFADER (0.0 to 1.0) =====
+    // Update crossfader based on mode
+    float dt = 0.016f;  // ~60fps
+    switch (vj.crossfade_mode) {
+        case 1: // Smooth fade
+            if (vj.crossfader < vj.crossfade_target) {
+                vj.crossfader += vj.crossfade_speed * dt;
+                if (vj.crossfader > vj.crossfade_target) vj.crossfader = vj.crossfade_target;
+            } else if (vj.crossfader > vj.crossfade_target) {
+                vj.crossfader -= vj.crossfade_speed * dt;
+                if (vj.crossfader < vj.crossfade_target) vj.crossfader = vj.crossfade_target;
+            }
+            break;
+        case 2: // Oscillate
+            vj.crossfade_phase += dt * vj.crossfade_speed;
+            vj.crossfader = 0.5f + 0.5f * sinf(vj.crossfade_phase);
+            break;
+        case 3: // Audio follow
+            if (vj.audio_enabled && vj.audio_data.valid) {
+                vj.crossfader = vj.audio_data.bass;
+            }
+            break;
+        case 4: // Hardcut on beat
+            if (vj.audio_enabled && vj.audio_data.beat_detected) {
+                vj.crossfader = (vj.crossfader < 0.5f) ? 1.0f : 0.0f;
+            }
+            break;
+    }
+
+    // Also support legacy 3-state mode
+    if (vj.crossfade_mode == 0) {
+        switch (vj.crossfade_state) {
+            case XFADE_FULL_A: vj.crossfader = 0.0f; break;
+            case XFADE_MIX: vj.crossfader = 0.5f; break;
+            case XFADE_FULL_B: vj.crossfader = 1.0f; break;
+        }
+    }
+
+    // Clamp crossfader
+    if (vj.crossfader < 0.0f) vj.crossfader = 0.0f;
+    if (vj.crossfader > 1.0f) vj.crossfader = 1.0f;
+
+    // Mix buffers based on smooth crossfader
     for (int i = 0; i < vj.width * vj.height; i++) {
         char a = vj.deck_a.buffer[i];
         char b = vj.deck_b.buffer[i];
-        
-        switch (vj.crossfade_state) {
-            case XFADE_FULL_A:
+
+        if (vj.crossfader <= 0.0f) {
+            vj.output_buffer[i] = a;
+        } else if (vj.crossfader >= 1.0f) {
+            vj.output_buffer[i] = b;
+        } else {
+            // Probabilistic mixing based on crossfader position
+            float threshold = vj.crossfader;
+            // Add pattern variation
+            int x = i % vj.width;
+            int y = i / vj.width;
+            float pattern = sinf(x * 0.2f + y * 0.3f + vj.time * 2.0f) * 0.1f;
+
+            if ((float)rand() / RAND_MAX > (threshold + pattern)) {
                 vj.output_buffer[i] = a;
-                break;
-                
-            case XFADE_FULL_B:
+            } else {
                 vj.output_buffer[i] = b;
-                break;
-                
-            case XFADE_MIX:
-                // Mix both decks - alternate characters for blend effect
-                if (a != ' ' && b != ' ') {
-                    // Both have content - use pattern for mixing
-                    vj.output_buffer[i] = ((i + (int)(vj.time * 8)) % 2) ? a : b;
-                } else if (a != ' ') {
-                    vj.output_buffer[i] = a;
-                } else {
-                    vj.output_buffer[i] = b;
+            }
+        }
+    }
+
+    // ===== APPLY OVERLAY EFFECTS =====
+
+    // Trails/Persistence effect
+    if (vj.trails_enabled && vj.trails_buffer) {
+        for (int i = 0; i < vj.width * vj.height; i++) {
+            char current = vj.output_buffer[i];
+            char trail = vj.trails_buffer[i];
+
+            if (current == ' ' && trail != ' ') {
+                // Fade the trail
+                if ((float)rand() / RAND_MAX > vj.trails_decay) {
+                    vj.output_buffer[i] = trail;
                 }
-                break;
+            }
+            // Update trail buffer
+            if (current != ' ') {
+                vj.trails_buffer[i] = current;
+            } else if ((float)rand() / RAND_MAX > vj.trails_decay) {
+                vj.trails_buffer[i] = ' ';
+            }
+        }
+    }
+
+    // Zoom Punch effect
+    if (vj.zoom_punch_active) {
+        vj.zoom_punch_time += dt;
+        vj.zoom_punch_amount *= vj.zoom_punch_decay;
+
+        if (vj.zoom_punch_amount > 0.01f) {
+            memcpy(vj.temp_buffer, vj.output_buffer, vj.width * vj.height);
+
+            int cx = vj.width / 2;
+            int cy = vj.height / 2;
+            float zoom = 1.0f + vj.zoom_punch_amount;
+
+            for (int y = 0; y < vj.height; y++) {
+                for (int x = 0; x < vj.width; x++) {
+                    int src_x = cx + (int)((x - cx) / zoom);
+                    int src_y = cy + (int)((y - cy) / zoom);
+
+                    if (src_x >= 0 && src_x < vj.width && src_y >= 0 && src_y < vj.height) {
+                        vj.output_buffer[y * vj.width + x] = vj.temp_buffer[src_y * vj.width + src_x];
+                    }
+                }
+            }
+        } else {
+            vj.zoom_punch_active = false;
+        }
+    }
+
+    // Audio Grid overlay
+    if (vj.audio_grid_enabled && vj.audio_enabled && vj.audio_data.valid) {
+        int bar_width = vj.width / 16;
+        const char* bar_chars = " .:-=+*#%@";
+
+        for (int band = 0; band < 16; band++) {
+            float level = vj.audio_data.spectrum[band * 4] * 2.0f;
+            if (level > 1.0f) level = 1.0f;
+            int bar_height = (int)(level * (vj.height - 2));
+
+            for (int y = vj.height - 1; y >= vj.height - bar_height && y >= 0; y--) {
+                for (int bx = 0; bx < bar_width - 1; bx++) {
+                    int x = band * bar_width + bx;
+                    if (x < vj.width) {
+                        int intensity = (int)(level * 9);
+                        if (intensity > 9) intensity = 9;
+                        vj.output_buffer[y * vj.width + x] = bar_chars[intensity];
+                    }
+                }
+            }
+        }
+    }
+
+    // Text Overlays
+    if (vj.text_overlay_enabled) {
+        const char* words[] = {"BASS", "DROP", "BEAT", "SYNC", "WAVE", "PULSE", "VOID", "DATA", "GLITCH", "NOISE"};
+        int num_words = 10;
+
+        vj.text_overlay_time += dt;
+        if (vj.text_overlay_time < vj.text_overlay_duration) {
+            const char* word = words[vj.text_overlay_index % num_words];
+            int len = strlen(word);
+
+            for (int i = 0; i < len && vj.text_overlay_x + i < vj.width; i++) {
+                if (vj.text_overlay_y >= 0 && vj.text_overlay_y < vj.height) {
+                    vj.output_buffer[vj.text_overlay_y * vj.width + vj.text_overlay_x + i] = word[i];
+                }
+            }
+        } else {
+            vj.text_overlay_enabled = false;
+        }
+    }
+
+    // Color Fill overlay
+    if (vj.color_fill_active) {
+        vj.color_fill_time += dt;
+        if (vj.color_fill_time < 0.3f) {
+            for (int y = vj.color_fill_y; y < vj.color_fill_y + vj.color_fill_h && y < vj.height; y++) {
+                for (int x = vj.color_fill_x; x < vj.color_fill_x + vj.color_fill_w && x < vj.width; x++) {
+                    if (y >= 0 && x >= 0) {
+                        vj.output_buffer[y * vj.width + x] = "█▓▒░"[rand() % 4];
+                    }
+                }
+            }
+        } else {
+            vj.color_fill_active = false;
+        }
+    }
+
+    // Ikeda Mode (brutal B&W)
+    if (vj.ikeda_mode) {
+        for (int i = 0; i < vj.width * vj.height; i++) {
+            char c = vj.output_buffer[i];
+            // Convert to high contrast B&W
+            if (c == ' ' || c == '.' || c == ',' || c == '-') {
+                vj.output_buffer[i] = ' ';
+            } else {
+                vj.output_buffer[i] = ((float)rand() / RAND_MAX < vj.ikeda_threshold) ? ' ' : '@';
+            }
+        }
+    }
+
+    // Grid Freeze effect (freeze cells of the grid)
+    if (vj.grid_freeze_enabled && vj.grid_freeze_cells && vj.grid_freeze_buffer) {
+        int div = vj.grid_freeze_divisions;
+        int cell_w = vj.width / div;
+        int cell_h = vj.height / div;
+
+        for (int cy = 0; cy < div; cy++) {
+            for (int cx = 0; cx < div; cx++) {
+                int cell_idx = cy * div + cx;
+
+                if (vj.grid_freeze_cells[cell_idx]) {
+                    // This cell is frozen - copy from freeze buffer
+                    for (int y = cy * cell_h; y < (cy + 1) * cell_h && y < vj.height; y++) {
+                        for (int x = cx * cell_w; x < (cx + 1) * cell_w && x < vj.width; x++) {
+                            vj.output_buffer[y * vj.width + x] = vj.grid_freeze_buffer[y * vj.width + x];
+                        }
+                    }
+                } else {
+                    // Not frozen - update freeze buffer with current content
+                    for (int y = cy * cell_h; y < (cy + 1) * cell_h && y < vj.height; y++) {
+                        for (int x = cx * cell_w; x < (cx + 1) * cell_w && x < vj.width; x++) {
+                            vj.grid_freeze_buffer[y * vj.width + x] = vj.output_buffer[y * vj.width + x];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Server Burst effect (red chaos)
+    if (vj.server_burst_active) {
+        vj.server_burst_time += dt;
+        if (vj.server_burst_time < vj.server_burst_duration) {
+            float intensity = vj.server_burst_intensity * (1.0f - vj.server_burst_time / vj.server_burst_duration);
+            int num_corruptions = (int)(intensity * 50);
+
+            for (int c = 0; c < num_corruptions; c++) {
+                int x = rand() % vj.width;
+                int y = rand() % vj.height;
+                vj.output_buffer[y * vj.width + x] = "█▓▒#@$%&*!"[rand() % 10];
+            }
+        } else {
+            vj.server_burst_active = false;
+        }
+    }
+
+    // ===== GLOBAL AUDIO-REACTIVE POST-PROCESSING =====
+    // This makes ALL scenes feel alive with audio, regardless of scene code
+    if (vj.audio_enabled && vj.audio_data.valid) {
+        AudioData* a = &vj.audio_data;
+        int total = vj.width * vj.height;
+
+        // Character sets that cycle on beat-32
+        static const char* charsets[] = {
+            " .:-=+*#%@",      // 0: Standard density ramp
+            " ░▒▓█",           // 1: Block elements (UTF-8 but as single chars)
+            " .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",  // 2: Full ASCII ramp
+            " .-:;=+*#%@$&",   // 3: Symbols
+            " .oO@#",          // 4: Minimal dots
+            " |/-\\*+#@",      // 5: Tech/lines
+        };
+        static const int charset_lens[] = {10, 5, 70, 13, 6, 9};
+        int cs = vj.active_charset % 6;
+        const char* active_cs = charsets[cs];
+        int cs_len = charset_lens[cs];
+
+        // 1. BEAT FLASH: On beat, invert a percentage of characters
+        if (a->beat_detected && a->beat_intensity > 0.3f) {
+            int flash_count = (int)(a->beat_intensity * total * 0.08f);
+            for (int f = 0; f < flash_count; f++) {
+                int idx = rand() % total;
+                char c = vj.output_buffer[idx];
+                if (c == ' ') {
+                    vj.output_buffer[idx] = ".,:;=+*#"[rand() % 8];
+                }
+            }
+        }
+
+        // 2. BASS WARP: On strong bass, shift rows horizontally
+        if (a->bass > 0.4f) {
+            int shift_amount = (int)(a->bass * 3.0f);
+            int num_rows = (int)(a->bass * vj.height * 0.15f);
+            for (int r = 0; r < num_rows; r++) {
+                int y = rand() % vj.height;
+                int dir = (rand() % 2) ? shift_amount : -shift_amount;
+                if (dir > 0) {
+                    // Shift right
+                    for (int x = vj.width - 1; x >= dir; x--) {
+                        vj.output_buffer[y * vj.width + x] = vj.output_buffer[y * vj.width + x - dir];
+                    }
+                } else if (dir < 0) {
+                    // Shift left
+                    for (int x = 0; x < vj.width + dir; x++) {
+                        vj.output_buffer[y * vj.width + x] = vj.output_buffer[y * vj.width + x - dir];
+                    }
+                }
+            }
+        }
+
+        // 3. TREBLE SPARKLE: High frequencies add bright chars to empty spaces
+        if (a->treble > 0.3f) {
+            int sparkle_count = (int)(a->treble * 40.0f);
+            for (int s = 0; s < sparkle_count; s++) {
+                int idx = rand() % total;
+                if (vj.output_buffer[idx] == ' ') {
+                    vj.output_buffer[idx] = active_cs[1 + rand() % (cs_len - 1)];
+                }
+            }
+        }
+
+        // 4. SPECTRAL FLUX GLITCH: When sound is changing fast, corrupt chars
+        if (a->spectral_flux > 0.5f) {
+            int glitch_count = (int)((a->spectral_flux - 0.5f) * 100.0f);
+            const char* glitch_chars = "#@$%&!?><|/\\~^";
+            for (int g = 0; g < glitch_count; g++) {
+                int idx = rand() % total;
+                if (vj.output_buffer[idx] != ' ') {
+                    vj.output_buffer[idx] = glitch_chars[rand() % 14];
+                }
+            }
+        }
+
+        // 5. ATTACK ZOOM: Sharp transients trigger zoom punch
+        if (a->attack > 0.6f && !vj.zoom_punch_active) {
+            trigger_zoom_punch(a->attack * 0.3f);
+        }
+
+        // 6. DROP IMPACT: Bass drop fills bottom rows with heavy chars
+        if (a->drop_intensity > 0.5f) {
+            int impact_rows = (int)(a->drop_intensity * 4.0f);
+            for (int r = 0; r < impact_rows && r < vj.height; r++) {
+                int y = vj.height - 1 - r;
+                for (int x = 0; x < vj.width; x++) {
+                    if (rand() % 3 == 0) {
+                        // Use densest chars from active charset
+                        vj.output_buffer[y * vj.width + x] = active_cs[cs_len - 1 - (rand() % 3 % cs_len)];
+                    }
+                }
+            }
+        }
+
+        // 7. AUDIO-REACTIVE CHARACTER DENSITY: Volume controls density of non-space chars
+        // When volume is low, thin out characters. When high, fill gaps.
+        if (a->volume > 0.6f) {
+            // High energy: densify - replace some spaces near existing chars
+            int fill_count = (int)((a->volume - 0.6f) * 80.0f);
+            for (int f = 0; f < fill_count; f++) {
+                int x = rand() % (vj.width - 2) + 1;
+                int y = rand() % (vj.height - 2) + 1;
+                if (vj.output_buffer[y * vj.width + x] == ' ') {
+                    // Check if neighbor has content
+                    bool has_neighbor = false;
+                    for (int dy = -1; dy <= 1 && !has_neighbor; dy++) {
+                        for (int dx = -1; dx <= 1 && !has_neighbor; dx++) {
+                            if (vj.output_buffer[(y+dy) * vj.width + (x+dx)] != ' ')
+                                has_neighbor = true;
+                        }
+                    }
+                    if (has_neighbor) {
+                        vj.output_buffer[y * vj.width + x] = ".-:=+*"[rand() % 6];
+                    }
+                }
+            }
+        }
+
+        // 8. BUILDUP TRAILS: During musical buildup, enable temporary trails
+        if (a->buildup_intensity > 0.4f && !vj.trails_enabled) {
+            // Temporarily show trails during buildup
+            if (vj.trails_buffer) {
+                for (int i = 0; i < total; i++) {
+                    char current = vj.output_buffer[i];
+                    char trail = vj.trails_buffer[i];
+                    if (current == ' ' && trail != ' ') {
+                        if ((float)rand() / RAND_MAX < a->buildup_intensity * 0.5f) {
+                            vj.output_buffer[i] = trail;
+                        }
+                    }
+                    if (current != ' ') vj.trails_buffer[i] = current;
+                }
+            }
+        }
+
+        // 9. WS BEAT INTENSITY FLASH: WebSocket beat pulse from FoxDot
+        float ws_pulse = vj.live_coding.ws_beat_intensity;
+        if (ws_pulse > 0.3f) {
+            // Brighten characters based on ws beat pulse
+            int brighten_count = (int)(ws_pulse * total * 0.05f);
+            for (int b = 0; b < brighten_count; b++) {
+                int idx = rand() % total;
+                char c = vj.output_buffer[idx];
+                // Upgrade light chars to heavier ones
+                if (c == '.' || c == ',') vj.output_buffer[idx] = ':';
+                else if (c == ':' || c == ';') vj.output_buffer[idx] = '=';
+                else if (c == '-' || c == '~') vj.output_buffer[idx] = '+';
+                else if (c == '+' || c == '=') vj.output_buffer[idx] = '#';
+            }
+        }
+    }
+
+    // 3D Overlay (simple wireframe)
+    if (vj.overlay_3d_enabled) {
+        vj.overlay_3d_rotation += dt * 2.0f;
+        int cx = vj.width / 2;
+        int cy = vj.height / 2;
+        float scale = vj.overlay_3d_scale * 10.0f;
+
+        // Simple rotating cube wireframe
+        float cos_r = cosf(vj.overlay_3d_rotation);
+        float sin_r = sinf(vj.overlay_3d_rotation);
+
+        // Draw 8 corners of cube
+        float cube_points[8][3] = {
+            {-1,-1,-1}, {1,-1,-1}, {1,1,-1}, {-1,1,-1},
+            {-1,-1,1}, {1,-1,1}, {1,1,1}, {-1,1,1}
+        };
+
+        for (int i = 0; i < 8; i++) {
+            float x = cube_points[i][0];
+            float y = cube_points[i][1];
+            float z = cube_points[i][2];
+
+            // Rotate
+            float rx = x * cos_r - z * sin_r;
+            float rz = x * sin_r + z * cos_r;
+
+            // Project
+            float depth = 3.0f + rz;
+            int px = cx + (int)(rx * scale / depth);
+            int py = cy + (int)(y * scale / depth / 2.0f);
+
+            if (px >= 0 && px < vj.width && py >= 0 && py < vj.height) {
+                vj.output_buffer[py * vj.width + px] = "o*#@"[(int)(depth) % 4];
+            }
+        }
+    }
+
+    // Grid Crop/Zoom
+    if (vj.grid_crop_enabled && vj.grid_crop_zoom) {
+        memcpy(vj.temp_buffer, vj.output_buffer, vj.width * vj.height);
+
+        int div = vj.grid_crop_divisions;
+        int cell_w = vj.width / div;
+        int cell_h = vj.height / div;
+
+        for (int cy = 0; cy < div; cy++) {
+            for (int cx = 0; cx < div; cx++) {
+                float zoom = vj.grid_crop_zoom[cy * div + cx];
+                int cell_cx = cx * cell_w + cell_w / 2;
+                int cell_cy = cy * cell_h + cell_h / 2;
+
+                for (int y = cy * cell_h; y < (cy + 1) * cell_h && y < vj.height; y++) {
+                    for (int x = cx * cell_w; x < (cx + 1) * cell_w && x < vj.width; x++) {
+                        int src_x = cell_cx + (int)((x - cell_cx) / zoom);
+                        int src_y = cell_cy + (int)((y - cell_cy) / zoom);
+
+                        if (src_x >= 0 && src_x < vj.width && src_y >= 0 && src_y < vj.height) {
+                            vj.output_buffer[y * vj.width + x] = vj.temp_buffer[src_y * vj.width + src_x];
+                        } else {
+                            vj.output_buffer[y * vj.width + x] = ' ';
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -16418,68 +17746,80 @@ void vj_render_ui() {
     render_live_coding_overlay();
     
     // Render main output with enhanced color mapping
+    int ov_start = vj.live_coding.overlay_start_y;
+    int ov_end = ov_start + vj.live_coding.overlay_num_lines;
+
     for (int y = 0; y < vj.height; y++) {
         for (int x = 0; x < vj.width; x++) {
             char c = vj.output_buffer[y * vj.width + x];
-            
+
+            // Check if this line is an overlay line with a specific color
+            if (has_colors() && y >= ov_start && y < ov_end && vj.live_coding.display_overlay) {
+                int ov_idx = y - ov_start;
+                int ov_color = vj.live_coding.overlay_line_colors[ov_idx];
+                if (ov_color > 0 && c != ' ') {
+                    attron(COLOR_PAIR(ov_color) | A_BOLD);
+                    mvaddch(y, x, c);
+                    attroff(COLOR_PAIR(ov_color) | A_BOLD);
+                } else if (c != ' ') {
+                    attron(COLOR_PAIR(7)); // white for status line
+                    mvaddch(y, x, c);
+                    attroff(COLOR_PAIR(7));
+                } else {
+                    mvaddch(y, x, c);
+                }
+                continue;
+            }
+
             if (has_colors() && c != ' ') {
+                // Audio-reactive intensity for color selection
+                float audio_intensity = 0.7f;
+                if (vj.audio_enabled && vj.audio_data.valid) {
+                    audio_intensity = 0.3f + vj.audio_data.smooth_volume * 0.7f;
+                }
+
                 // Enhanced color selection based on crossfade state
                 int color_pair;
-                
+
                 switch (vj.crossfade_state) {
                     case XFADE_FULL_A:
-                        color_pair = get_visual_color(c, &vj.deck_a, 0.7f, x, y, vj.width, vj.height, vj.time);
+                        color_pair = get_visual_color(c, &vj.deck_a, audio_intensity, x, y, vj.width, vj.height, vj.time);
                         break;
-                        
+
                     case XFADE_FULL_B:
-                        color_pair = get_visual_color(c, &vj.deck_b, 0.7f, x, y, vj.width, vj.height, vj.time);
+                        color_pair = get_visual_color(c, &vj.deck_b, audio_intensity, x, y, vj.width, vj.height, vj.time);
                         break;
-                        
+
                     case XFADE_MIX:
-                        // Mix colors from both decks based on position and time
                         {
-                            // Determine which deck's color to use based on pattern
                             bool use_deck_a;
-                            
-                            // Create different mixing patterns
                             int pattern = ((int)(vj.time * 0.1f)) % 4;
                             switch (pattern) {
-                                case 0: // Checkerboard pattern
-                                    use_deck_a = ((x + y) % 2) == 0;
-                                    break;
-                                case 1: // Horizontal stripes
-                                    use_deck_a = (y % 4) < 2;
-                                    break;
-                                case 2: // Vertical stripes  
-                                    use_deck_a = (x % 4) < 2;
-                                    break;
-                                case 3: // Time-based alternating
-                                    use_deck_a = ((int)(vj.time * 2.0f + x + y)) % 2 == 0;
-                                    break;
-                                default:
-                                    use_deck_a = true;
-                                    break;
+                                case 0: use_deck_a = ((x + y) % 2) == 0; break;
+                                case 1: use_deck_a = (y % 4) < 2; break;
+                                case 2: use_deck_a = (x % 4) < 2; break;
+                                case 3: use_deck_a = ((int)(vj.time * 2.0f + x + y)) % 2 == 0; break;
+                                default: use_deck_a = true; break;
                             }
-                            
-                            // Get color from appropriate deck
-                            if (use_deck_a) {
-                                color_pair = get_visual_color(c, &vj.deck_a, 0.7f, x, y, vj.width, vj.height, vj.time);
-                            } else {
-                                color_pair = get_visual_color(c, &vj.deck_b, 0.7f, x, y, vj.width, vj.height, vj.time);
-                            }
+                            color_pair = use_deck_a ?
+                                get_visual_color(c, &vj.deck_a, audio_intensity, x, y, vj.width, vj.height, vj.time) :
+                                get_visual_color(c, &vj.deck_b, audio_intensity, x, y, vj.width, vj.height, vj.time);
                         }
                         break;
-                        
+
                     default:
-                        color_pair = get_visual_color(c, &vj.deck_a, 0.7f, x, y, vj.width, vj.height, vj.time);
+                        color_pair = get_visual_color(c, &vj.deck_a, audio_intensity, x, y, vj.width, vj.height, vj.time);
                         break;
                 }
-                
-                attron(COLOR_PAIR(color_pair));
+
+                // Bold on beat for extra punch
+                int attrs = COLOR_PAIR(color_pair);
+                if (vj.audio_enabled && vj.audio_data.beat_detected) {
+                    attrs |= A_BOLD;
+                }
+                attron(attrs);
                 mvaddch(y, x, c);
-                attroff(COLOR_PAIR(color_pair));
-                
-                // Removed audio beat detection
+                attroff(attrs);
             } else {
                 mvaddch(y, x, c);
             }
@@ -16514,13 +17854,23 @@ void vj_render_ui() {
     } else {
         attron(A_REVERSE);
     }
-    mvprintw(ui_y, 0, "+--- CLIFT v2.1 ----------------------------------------------------------+");
-    mvprintw(ui_y + 1, 0, "| FPS:%3d | Speed:%.1fx | BPM:%.0f | Auto:%s | FullAuto:%s | XFade:%s    |",
-             fps, vj.master_speed.value, 
+    const char* ws_indicator;
+    if (!vj.live_coding.enabled) {
+        ws_indicator = "WS:OFF";
+    } else if (vj.live_coding.client_mode) {
+        ws_indicator = vj.live_coding.ws_connected ? "WS:CONN" : "WS:....";
+    } else {
+        ws_indicator = vj.live_coding.client_count > 0 ? "WS:OK" : "WS:--";
+    }
+    mvprintw(ui_y, 0, "+--- CLIFT v2.1 --- %s:%d --- CPU:%.0f%% ---------------------------------+",
+             vj.live_coding.host, vj.live_coding.port, vj.live_coding.cpu_usage);
+    mvprintw(ui_y + 1, 0, "| FPS:%3d | BPM:%.0f | %s | Auto:%s | FullAuto:%s | XFade:%s        |",
+             fps,
              vj.bpm_system.bpm > 0 ? vj.bpm_system.bpm : 0.0f,
+             ws_indicator,
              vj.bpm_system.auto_crossfade_enabled ? "ON " : "OFF",
              vj.full_auto_mode ? "ON " : "OFF",
-             vj.crossfade_state == XFADE_FULL_A ? " A " : 
+             vj.crossfade_state == XFADE_FULL_A ? " A " :
              (vj.crossfade_state == XFADE_MIX ? "MIX" : " B "));
     
     if (has_colors()) {
@@ -16664,9 +18014,9 @@ void vj_render_ui() {
         {
             const char* ws_status = vj.live_coding.enabled ? "ENABLED" : "DISABLED";
             const char* overlay_status = vj.live_coding.display_overlay ? "ON" : "OFF";
-            
-            mvprintw(ui_y + 7, 0, "| LIVE CODING | WebSocket: %s | Port: %d | Overlay: %s               |",
-                     ws_status, vj.live_coding.port, overlay_status);
+
+            mvprintw(ui_y + 7, 0, "| LIVE CODING | WebSocket: %s | %s:%d | Overlay: %s         |",
+                     ws_status, vj.live_coding.host, vj.live_coding.port, overlay_status);
             
             mvprintw(ui_y + 8, 0, "| %s: %s | %s: %s |",
                      vj.live_coding.players[0].player_name,
@@ -17015,8 +18365,12 @@ void cycle_preset_name(int preset_id) {
 
 void init_live_coding_monitor() {
     vj.live_coding.enabled = false;
-    vj.live_coding.port = 8080;
-    vj.live_coding.display_overlay = false;
+    vj.live_coding.client_mode = false;
+    vj.live_coding.ws_connected = false;
+    vj.live_coding.port = 20000;
+    strncpy(vj.live_coding.host, "0.0.0.0", sizeof(vj.live_coding.host) - 1);
+    vj.live_coding.host[sizeof(vj.live_coding.host) - 1] = '\0';
+    vj.live_coding.display_overlay = true;  // ON by default for fullscreen use
     vj.live_coding.overlay_opacity = 80;
     vj.live_coding.cpu_usage = 0.0f;
     vj.live_coding.memory_usage = 0.0f;
@@ -17029,14 +18383,37 @@ void init_live_coding_monitor() {
         vj.live_coding.client_sockets[i] = -1;
     }
     
-    // Initialize players
-    for (int i = 0; i < 2; i++) {
-        snprintf(vj.live_coding.players[i].player_name, sizeof(vj.live_coding.players[i].player_name), "Player %d", i + 1);
-        strcpy(vj.live_coding.players[i].current_code, "// Waiting for connection...");
-        strcpy(vj.live_coding.players[i].last_executed, "");
+    // Initialize players (3 sources: SVDK, ZBDM, SERVER)
+    strcpy(vj.live_coding.players[CODE_SOURCE_SVDK].player_name, "SVDK");
+    strcpy(vj.live_coding.players[CODE_SOURCE_ZBDM].player_name, "ZBDM");
+    strcpy(vj.live_coding.players[CODE_SOURCE_SERVER].player_name, "SERVER");
+    for (int i = 0; i < NUM_CODE_SOURCES; i++) {
+        vj.live_coding.players[i].current_code[0] = '\0';
+        vj.live_coding.players[i].last_executed[0] = '\0';
         vj.live_coding.players[i].is_active = false;
         vj.live_coding.players[i].last_update_time = 0.0f;
+        vj.live_coding.players[i].is_fresh = false;
+        vj.live_coding.players[i].fresh_time = 0.0f;
+        vj.live_coding.players[i].fade_time = 0.0f;
     }
+
+    // Beat sync
+    vj.live_coding.ws_beat = 0.0f;
+    vj.live_coding.ws_beat_count = 0;
+    vj.live_coding.ws_beat_triggered = false;
+    vj.live_coding.ws_beat_time = 0.0f;
+    vj.live_coding.ws_beat_intensity = 0.0f;
+
+    // Musical context
+    strcpy(vj.live_coding.scale_name, "");
+    strcpy(vj.live_coding.root_note, "");
+    vj.live_coding.chrono = 0.0f;
+    vj.live_coding.server_active = false;
+
+    // Attack
+    vj.live_coding.attack_content[0] = '\0';
+    vj.live_coding.attack_time = 0.0f;
+    vj.live_coding.attack_active = false;
 }
 
 void update_cpu_usage() {
@@ -17061,148 +18438,373 @@ void update_cpu_usage() {
     }
 }
 
+// Helper: extract JSON string value, handling escaped quotes
+// Returns length written to dst, or 0 on failure
+static int extract_json_string(const char* json, const char* key, char* dst, int dst_size) {
+    // Search for "key":"
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\":\"", key);
+    char* start = strstr(json, search);
+    if (!start) {
+        // Try with space: "key": "
+        snprintf(search, sizeof(search), "\"%s\": \"", key);
+        start = strstr(json, search);
+        if (!start) return 0;
+    }
+    start = strchr(start + 1, ':');  // Find the colon
+    if (!start) return 0;
+    start++;
+    while (*start == ' ') start++;  // Skip spaces
+    if (*start != '"') return 0;
+    start++;  // Skip opening quote
+
+    // Copy until unescaped closing quote
+    int len = 0;
+    while (*start && len < dst_size - 1) {
+        if (*start == '\\' && *(start + 1)) {
+            // Escaped character
+            start++;
+            if (*start == 'n') { dst[len++] = '\n'; }
+            else if (*start == 't') { dst[len++] = '\t'; }
+            else if (*start == 'r') { dst[len++] = '\r'; }
+            else { dst[len++] = *start; }
+            start++;
+        } else if (*start == '"') {
+            break;  // Unescaped quote = end of string
+        } else {
+            dst[len++] = *start++;
+        }
+    }
+    dst[len] = '\0';
+    return len;
+}
+
+// Helper: extract JSON number value
+static float extract_json_number(const char* json, const char* key) {
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\":", key);
+    char* start = strstr(json, search);
+    if (!start) return -1.0f;
+    start += strlen(search);
+    while (*start == ' ') start++;
+    return atof(start);
+}
+
+// Helper: set player code with eval (blink + fade timer)
+static void set_player_eval_code(int idx, const char* message) {
+    LiveCodingPlayer* player = &vj.live_coding.players[idx];
+    extract_json_string(message, "code", player->current_code, sizeof(player->current_code));
+    strncpy(player->last_executed, player->current_code, sizeof(player->last_executed) - 1);
+    player->is_active = true;
+    player->is_fresh = true;
+    player->fresh_time = vj.time;
+    player->fade_time = vj.time + 10.0f;  // 10 second display
+    player->last_update_time = vj.time;
+
+    // === VISUAL TRIGGERS ON CODE EVALUATION ===
+    // Each code eval is a performance event - trigger visual changes
+    static int eval_count = 0;
+    eval_count++;
+
+    // Always: zoom punch (the audience sees the impact)
+    trigger_zoom_punch(0.15f + (float)(rand() % 20) / 100.0f);
+
+    // Every 2nd eval: change colors on active deck
+    if (eval_count % 2 == 0) {
+        CLIFTDeck* active = (vj.crossfader < 0.5f) ? &vj.deck_a : &vj.deck_b;
+        randomize_deck_colors(active);
+    }
+
+    // Every 3rd eval: change post-effect on active deck
+    if (eval_count % 3 == 0) {
+        CLIFTDeck* active = (vj.crossfader < 0.5f) ? &vj.deck_a : &vj.deck_b;
+        randomize_deck_post_effect(active);
+    }
+
+    // Every 5th eval: change scene on INACTIVE deck and crossfade to it
+    if (eval_count % 5 == 0) {
+        CLIFTDeck* inactive = (vj.crossfader < 0.5f) ? &vj.deck_b : &vj.deck_a;
+        randomize_deck_scene(inactive);
+        randomize_deck_colors(inactive);
+        vj.crossfade_target = (vj.crossfader < 0.5f) ? 1.0f : 0.0f;
+        vj.crossfade_mode = 1; // Smooth fade
+        vj.crossfade_speed = 1.0f + (float)(rand() % 20) / 10.0f;
+    }
+
+    // Server code evals also trigger text overlay
+    if (idx == CODE_SOURCE_SERVER && rand() % 3 == 0) {
+        trigger_text_overlay();
+    }
+}
+
+// Helper: set player instant code (no blink, refreshes fade timer)
+static void set_player_instant_code(int idx, const char* message) {
+    LiveCodingPlayer* player = &vj.live_coding.players[idx];
+    extract_json_string(message, "code", player->current_code, sizeof(player->current_code));
+    player->is_active = true;
+    player->fade_time = vj.time + 10.0f;
+    player->last_update_time = vj.time;
+}
+
 void parse_websocket_message(const char* message) {
-    // Debug check
-    if (!message) {
-        fprintf(stderr, "ERROR: parse_websocket_message called with NULL message\n");
+    if (!message || !*message) return;
+
+    // Determine message type
+    char type[64] = "";
+    extract_json_string(message, "type", type, sizeof(type));
+
+    // ===== BPM (this IS a beat trigger - sent every 60/bpm) =====
+    if (strcmp(type, "bpm") == 0) {
+        float bpm = extract_json_number(message, "bpm");
+        if (bpm > 20.0f && bpm < 300.0f) {
+            vj.bpm_system.bpm = bpm;
+        }
+        // BPM message = beat trigger
+        vj.live_coding.ws_beat_count++;
+        vj.live_coding.ws_beat_triggered = true;
+        vj.live_coding.ws_beat_time = vj.time;
+        vj.live_coding.ws_beat_intensity = 1.0f;
         return;
     }
-    
-    // Simple JSON-like parsing for live coding data
-    // Expected format: {"player":0,"code":"synth :saw","executed":"play :kick","active":true}
-    
-    if (strstr(message, "\"player\":0") || strstr(message, "\"player\": 0")) {
-        // Player 1 data
-        LiveCodingPlayer* player = &vj.live_coding.players[0];
-        
-        // Extract code
-        char* code_start = strstr(message, "\"code\":\"");
-        if (code_start) {
-            code_start += 8; // Skip "code":"
-            char* code_end = strchr(code_start, '"');
-            if (code_end) {
-                int len = code_end - code_start;
-                if (len < sizeof(player->current_code) - 1) {
-                    strncpy(player->current_code, code_start, len);
-                    player->current_code[len] = '\0';
-                }
-            }
+
+    // ===== BEAT (Clock.beat for subdivisions) =====
+    if (strcmp(type, "beat") == 0) {
+        vj.live_coding.ws_beat = extract_json_number(message, "beat");
+        return;
+    }
+
+    // ===== CPU =====
+    if (strcmp(type, "cpu") == 0) {
+        float cpu = extract_json_number(message, "cpu");
+        if (cpu >= 0.0f) vj.live_coding.cpu_usage = cpu;
+        return;
+    }
+
+    // ===== PING =====
+    if (strcmp(type, "ping") == 0) return;
+
+    // ===== SVDK Instant Code =====
+    if (strcmp(type, "svdkInstantCode") == 0) {
+        set_player_instant_code(CODE_SOURCE_SVDK, message);
+        return;
+    }
+
+    // ===== ZBDM Instant Code =====
+    if (strcmp(type, "zbdmInstantCode") == 0) {
+        set_player_instant_code(CODE_SOURCE_ZBDM, message);
+        return;
+    }
+
+    // ===== SVDK Eval Code =====
+    if (strcmp(type, "svdkCode") == 0) {
+        set_player_eval_code(CODE_SOURCE_SVDK, message);
+        return;
+    }
+
+    // ===== ZBDM Eval Code =====
+    if (strcmp(type, "zbdmCode") == 0) {
+        set_player_eval_code(CODE_SOURCE_ZBDM, message);
+        return;
+    }
+
+    // ===== Server Code =====
+    if (strcmp(type, "serverCode") == 0) {
+        set_player_eval_code(CODE_SOURCE_SERVER, message);
+        return;
+    }
+
+    // ===== Evaluate Code (from server with userName) =====
+    if (strcmp(type, "evaluate_code") == 0) {
+        char userName[64] = "";
+        extract_json_string(message, "userName", userName, sizeof(userName));
+        int idx = CODE_SOURCE_SERVER;
+        if (strcasecmp(userName, "svdk") == 0) idx = CODE_SOURCE_SVDK;
+        else if (strcasecmp(userName, "zbdm") == 0) idx = CODE_SOURCE_ZBDM;
+        set_player_eval_code(idx, message);
+        return;
+    }
+
+    // ===== Server State =====
+    if (strcmp(type, "serverState") == 0) {
+        float state = extract_json_number(message, "serverState");
+        vj.live_coding.server_active = (state > 0);
+        return;
+    }
+
+    // ===== Attack (chaos trigger) =====
+    if (strcmp(type, "attack") == 0) {
+        extract_json_string(message, "content", vj.live_coding.attack_content, sizeof(vj.live_coding.attack_content));
+        vj.live_coding.attack_time = vj.time;
+        vj.live_coding.attack_active = true;
+        // Trigger visual chaos
+        trigger_server_burst(1.0f);
+        trigger_zoom_punch(0.5f);
+        // Show attack code on SERVER source
+        LiveCodingPlayer* sp = &vj.live_coding.players[CODE_SOURCE_SERVER];
+        strncpy(sp->current_code, vj.live_coding.attack_content, sizeof(sp->current_code) - 1);
+        strncpy(sp->last_executed, vj.live_coding.attack_content, sizeof(sp->last_executed) - 1);
+        sp->is_active = true;
+        sp->is_fresh = true;
+        sp->fresh_time = vj.time;
+        sp->fade_time = vj.time + 10.0f;
+        sp->last_update_time = vj.time;
+        return;
+    }
+
+    // ===== Scale =====
+    if (strcmp(type, "scale") == 0) {
+        extract_json_string(message, "scale", vj.live_coding.scale_name, sizeof(vj.live_coding.scale_name));
+        return;
+    }
+
+    // ===== Root =====
+    if (strcmp(type, "root") == 0) {
+        extract_json_string(message, "root", vj.live_coding.root_note, sizeof(vj.live_coding.root_note));
+        return;
+    }
+
+    // ===== Chrono =====
+    if (strcmp(type, "chrono") == 0) {
+        vj.live_coding.chrono = extract_json_number(message, "chrono");
+        return;
+    }
+
+    // ===== Players (FoxDot player status) =====
+    if (strcmp(type, "players") == 0) {
+        // TODO: parse player list for display
+        return;
+    }
+
+    // ===== MasterFx =====
+    if (strcmp(type, "masterFx") == 0) {
+        return;
+    }
+
+    // ===== Legacy format: {"player":0,"code":"..."} =====
+    if (strstr(message, "\"player\"")) {
+        float player_num = extract_json_number(message, "player");
+        int player_idx = (int)player_num;
+        if (player_idx >= 0 && player_idx < NUM_CODE_SOURCES) {
+            LiveCodingPlayer* player = &vj.live_coding.players[player_idx];
+            extract_json_string(message, "code", player->current_code, sizeof(player->current_code));
+            extract_json_string(message, "executed", player->last_executed, sizeof(player->last_executed));
+            player->is_active = strstr(message, "\"active\":true") != NULL;
+            player->last_update_time = vj.time;
         }
-        
-        // Extract executed line
-        char* exec_start = strstr(message, "\"executed\":\"");
-        if (exec_start) {
-            exec_start += 12; // Skip "executed":"
-            char* exec_end = strchr(exec_start, '"');
-            if (exec_end) {
-                int len = exec_end - exec_start;
-                if (len < sizeof(player->last_executed) - 1) {
-                    strncpy(player->last_executed, exec_start, len);
-                    player->last_executed[len] = '\0';
-                }
-            }
-        }
-        
-        // Check if active
-        player->is_active = strstr(message, "\"active\":true") != NULL;
-        player->last_update_time = vj.time;
-        
-    } else if (strstr(message, "\"player\":1") || strstr(message, "\"player\": 1")) {
-        // Player 2 data - similar parsing
-        LiveCodingPlayer* player = &vj.live_coding.players[1];
-        
-        char* code_start = strstr(message, "\"code\":\"");
-        if (code_start) {
-            code_start += 8;
-            char* code_end = strchr(code_start, '"');
-            if (code_end) {
-                int len = code_end - code_start;
-                if (len < sizeof(player->current_code) - 1) {
-                    strncpy(player->current_code, code_start, len);
-                    player->current_code[len] = '\0';
-                }
-            }
-        }
-        
-        char* exec_start = strstr(message, "\"executed\":\"");
-        if (exec_start) {
-            exec_start += 12;
-            char* exec_end = strchr(exec_start, '"');
-            if (exec_end) {
-                int len = exec_end - exec_start;
-                if (len < sizeof(player->last_executed) - 1) {
-                    strncpy(player->last_executed, exec_start, len);
-                    player->last_executed[len] = '\0';
-                }
-            }
-        }
-        
-        player->is_active = strstr(message, "\"active\":true") != NULL;
-        player->last_update_time = vj.time;
     }
 }
 
 void render_live_coding_overlay() {
     if (!vj.live_coding.display_overlay) return;
-    
-    // Debug: Check for valid buffer
-    if (!vj.output_buffer) {
-        fprintf(stderr, "ERROR: render_live_coding_overlay called with NULL output_buffer\n");
-        return;
+    if (!vj.output_buffer) return;
+
+    float now = vj.time;
+    int max_lines = 24;
+    char overlay_lines[24][256];
+    int overlay_colors[24]; // ncurses color pair per line: 0=default, 6=cyan, 5=magenta, 3=yellow
+    int num_lines = 0;
+
+    // --- BPM meter bar ---
+    {
+        int bar_w = vj.width > 40 ? 20 : 10;
+        float beat_phase = vj.live_coding.ws_beat_intensity;
+        int filled = (int)(beat_phase * bar_w);
+        if (filled > bar_w) filled = bar_w;
+        char bar[64];
+        for (int i = 0; i < bar_w && i < 63; i++) bar[i] = i < filled ? '#' : '-';
+        bar[bar_w < 63 ? bar_w : 63] = '\0';
+
+        const char* ws_st = vj.live_coding.ws_connected ? "CONN" : "....";
+        snprintf(overlay_lines[num_lines], 256,
+                 " BPM:%.0f [%s] CPU:%.0f%% WS:%s %s:%d ",
+                 vj.bpm_system.bpm, bar, vj.live_coding.cpu_usage, ws_st,
+                 vj.live_coding.host, vj.live_coding.port);
+        overlay_colors[num_lines] = 0;
+        num_lines++;
     }
-    
-    // Compact overlay - just 2 lines at bottom of screen with black background
-    int start_y = vj.height - 4;  // Position near bottom
-    int overlay_width = vj.width;
-    
-    // Player 1 line with black background
-    if (start_y >= 0 && start_y < vj.height) {
-        // Clear the line with spaces (black background)
-        for (int x = 0; x < overlay_width && x < vj.width; x++) {
-            vj.output_buffer[start_y * vj.width + x] = ' ';
+
+    // --- Code sources: SVDK(cyan), ZBDM(magenta), SERVER(yellow) ---
+    int source_colors[NUM_CODE_SOURCES] = {6, 5, 3}; // cyan, magenta, yellow
+    for (int p = 0; p < NUM_CODE_SOURCES && num_lines < max_lines - 1; p++) {
+        LiveCodingPlayer* player = &vj.live_coding.players[p];
+
+        // Skip if no code and not active
+        if (player->current_code[0] == '\0') continue;
+
+        // Auto-fade: if fade_time set and expired, clear code
+        if (player->fade_time > 0.0f && now > player->fade_time) {
+            player->current_code[0] = '\0';
+            player->is_fresh = false;
+            continue;
         }
-        
-        // Format Player 1 info - get first line of code only
-        char p1_line[256];
-        char code_first_line[128];
-        strncpy(code_first_line, vj.live_coding.players[0].current_code, sizeof(code_first_line) - 1);
-        code_first_line[sizeof(code_first_line) - 1] = '\0';
-        
-        // Remove newlines from the code to show just first line
-        char* newline = strchr(code_first_line, '\n');
-        if (newline) *newline = '\0';
-        
-        snprintf(p1_line, sizeof(p1_line), "P1: %.60s", code_first_line);
-        
-        // Write Player 1 line
-        for (int x = 0; x < strlen(p1_line) && x < vj.width; x++) {
-            vj.output_buffer[start_y * vj.width + x] = p1_line[x];
+
+        // Blink effect: during fresh period (1.5s), toggle visibility
+        if (player->is_fresh) {
+            float fresh_elapsed = now - player->fresh_time;
+            if (fresh_elapsed > 1.5f) {
+                player->is_fresh = false; // Stop blinking
+            } else {
+                // Blink at ~6Hz
+                int blink_phase = (int)(fresh_elapsed * 12.0f);
+                if (blink_phase % 2 == 1) continue; // Hidden phase
+            }
+        }
+
+        // Player header with source indicator
+        const char* indicator = player->is_fresh ? ">>>" : "---";
+        snprintf(overlay_lines[num_lines], 256, " %s %s %s",
+                 indicator, player->player_name, indicator);
+        overlay_colors[num_lines] = source_colors[p];
+        num_lines++;
+
+        // Code lines (up to 6 lines)
+        if (player->current_code[0] != '\0' && num_lines < max_lines) {
+            char code_copy[4096];
+            strncpy(code_copy, player->current_code, sizeof(code_copy) - 1);
+            code_copy[sizeof(code_copy) - 1] = '\0';
+
+            // Split on newlines manually (strtok is not reentrant across players)
+            char* ptr = code_copy;
+            int line_count = 0;
+            while (*ptr && line_count < 6 && num_lines < max_lines) {
+                char* nl = strchr(ptr, '\n');
+                if (nl) *nl = '\0';
+                if (*ptr) {
+                    snprintf(overlay_lines[num_lines], 256, "  %.*s",
+                             vj.width - 4, ptr);
+                    overlay_colors[num_lines] = source_colors[p];
+                    num_lines++;
+                    line_count++;
+                }
+                if (nl) ptr = nl + 1; else break;
+            }
         }
     }
-    
-    // Player 2 line with black background
-    if (start_y + 1 >= 0 && start_y + 1 < vj.height) {
-        // Clear the line with spaces (black background)
-        for (int x = 0; x < overlay_width && x < vj.width; x++) {
-            vj.output_buffer[(start_y + 1) * vj.width + x] = ' ';
+
+    // Render overlay at center-top of screen (starting at y=3 to avoid audio levels at y=1)
+    int start_y = 3;
+    if (start_y < 0) start_y = 0;
+
+    for (int i = 0; i < num_lines && start_y + i < vj.height; i++) {
+        int y = start_y + i;
+        // Clear line in output buffer
+        for (int x = 0; x < vj.width; x++) {
+            vj.output_buffer[y * vj.width + x] = ' ';
         }
-        
-        // Format Player 2 info - get first line of code only
-        char p2_line[256];
-        char code_first_line[128];
-        strncpy(code_first_line, vj.live_coding.players[1].current_code, sizeof(code_first_line) - 1);
-        code_first_line[sizeof(code_first_line) - 1] = '\0';
-        
-        // Remove newlines from the code to show just first line
-        char* newline = strchr(code_first_line, '\n');
-        if (newline) *newline = '\0';
-        
-        snprintf(p2_line, sizeof(p2_line), "P2: %.60s", code_first_line);
-        
-        // Write Player 2 line
-        for (int x = 0; x < strlen(p2_line) && x < vj.width; x++) {
-            vj.output_buffer[(start_y + 1) * vj.width + x] = p2_line[x];
+        // Write text centered horizontally
+        int len = strlen(overlay_lines[i]);
+        int start_x = (vj.width - len) / 2;
+        if (start_x < 0) start_x = 0;
+        for (int x = 0; x < len && (start_x + x) < vj.width; x++) {
+            vj.output_buffer[y * vj.width + (start_x + x)] = overlay_lines[i][x];
         }
+    }
+
+    // Store overlay metadata in vj struct for color rendering in vj_render_ui
+    vj.live_coding.overlay_start_y = start_y;
+    vj.live_coding.overlay_num_lines = num_lines;
+    for (int i = 0; i < num_lines && i < 24; i++) {
+        vj.live_coding.overlay_line_colors[i] = overlay_colors[i];
     }
 }
 
@@ -17229,7 +18831,12 @@ void* websocket_server_thread(void* arg) {
     // Bind socket
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    // Use configured host or bind to all interfaces if "0.0.0.0"
+    if (strcmp(vj.live_coding.host, "0.0.0.0") == 0) {
+        server_addr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        server_addr.sin_addr.s_addr = inet_addr(vj.live_coding.host);
+    }
     server_addr.sin_port = htons(vj.live_coding.port);
     
     if (bind(vj.live_coding.server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
@@ -17335,9 +18942,136 @@ void start_websocket_server() {
 
 void stop_websocket_server() {
     if (!vj.live_coding.server_running) return;
-    
+
     vj.live_coding.server_running = false;
     pthread_join(vj.live_coding.server_thread, NULL);
+}
+
+// WebSocket CLIENT mode - connect TO an external server
+void* websocket_client_thread(void* arg) {
+    struct sockaddr_in server_addr;
+    unsigned char buffer[4096];
+
+    while (vj.live_coding.server_running) {
+        // Create socket
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            sleep(2);
+            continue;
+        }
+
+        // Set timeout
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        // Connect to server
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(vj.live_coding.port);
+        server_addr.sin_addr.s_addr = inet_addr(vj.live_coding.host);
+
+        if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+            close(sock);
+            vj.live_coding.ws_connected = false;
+            sleep(2);
+            continue;
+        }
+
+        // Send WebSocket handshake
+        char handshake[512];
+        snprintf(handshake, sizeof(handshake),
+            "GET / HTTP/1.1\r\n"
+            "Host: %s:%d\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n",
+            vj.live_coding.host, vj.live_coding.port);
+
+        if (send(sock, handshake, strlen(handshake), 0) < 0) {
+            close(sock);
+            vj.live_coding.ws_connected = false;
+            sleep(2);
+            continue;
+        }
+
+        // Read handshake response
+        ssize_t bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
+        if (bytes <= 0 || strstr((char*)buffer, "101") == NULL) {
+            close(sock);
+            vj.live_coding.ws_connected = false;
+            sleep(2);
+            continue;
+        }
+
+        vj.live_coding.ws_connected = true;
+        vj.live_coding.server_socket = sock;
+
+        // Main receive loop
+        while (vj.live_coding.server_running && vj.live_coding.ws_connected) {
+            bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
+            if (bytes <= 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                break; // Disconnected
+            }
+
+            // Parse WebSocket frame
+            if (bytes >= 2) {
+                int opcode = buffer[0] & 0x0F;
+                bool masked = (buffer[1] & 0x80) != 0;
+                size_t payload_len = buffer[1] & 0x7F;
+                size_t header_len = 2;
+
+                if (payload_len == 126 && bytes >= 4) {
+                    payload_len = (buffer[2] << 8) | buffer[3];
+                    header_len = 4;
+                } else if (payload_len == 127 && bytes >= 10) {
+                    payload_len = 0;
+                    for (int i = 0; i < 8; i++) {
+                        payload_len = (payload_len << 8) | buffer[2 + i];
+                    }
+                    header_len = 10;
+                }
+
+                if (masked) header_len += 4;
+
+                if (opcode == 0x01 && header_len + payload_len <= (size_t)bytes) { // Text frame
+                    char message[4096];
+                    size_t msg_len = payload_len < sizeof(message) - 1 ? payload_len : sizeof(message) - 1;
+                    memcpy(message, buffer + header_len, msg_len);
+                    message[msg_len] = '\0';
+                    parse_websocket_message(message);
+                } else if (opcode == 0x09) { // Ping
+                    buffer[0] = 0x8A; // Pong
+                    send(sock, buffer, bytes, 0);
+                } else if (opcode == 0x08) { // Close
+                    break;
+                }
+            }
+        }
+
+        close(sock);
+        vj.live_coding.ws_connected = false;
+        vj.live_coding.server_socket = -1;
+
+        if (vj.live_coding.server_running) {
+            sleep(2); // Reconnect delay
+        }
+    }
+
+    return NULL;
+}
+
+void start_websocket_client() {
+    if (vj.live_coding.server_running) return;
+    vj.live_coding.server_running = true;
+
+    if (pthread_create(&vj.live_coding.server_thread, NULL, websocket_client_thread, NULL) != 0) {
+        vj.live_coding.enabled = false;
+        vj.live_coding.server_running = false;
+    }
 }
 
 // Base64 encoding function
@@ -17698,8 +19432,8 @@ void vj_handle_input() {
         case '+': case '=':
             if (vj.current_ui_page == UI_PAGE_AUDIO) {
                 // Adjust audio gain
-                vj.audio_gain += 0.1f;
-                if (vj.audio_gain > 10.0f) vj.audio_gain = 10.0f;
+                vj.audio_gain += 1.0f;
+                if (vj.audio_gain > 50.0f) vj.audio_gain = 50.0f;
             } else {
                 vj.master_speed.target = (vj.master_speed.target + 0.1f > vj.master_speed.max) ? 
                     vj.master_speed.max : vj.master_speed.target + 0.1f;
@@ -17708,7 +19442,7 @@ void vj_handle_input() {
         case '-': case '_':
             if (vj.current_ui_page == UI_PAGE_AUDIO) {
                 // Adjust audio gain
-                vj.audio_gain -= 0.1f;
+                vj.audio_gain -= 1.0f;
                 if (vj.audio_gain < 0.1f) vj.audio_gain = 0.1f;
             } else {
                 vj.master_speed.target = (vj.master_speed.target - 0.1f < vj.master_speed.min) ? 
@@ -17752,7 +19486,75 @@ void vj_handle_input() {
                 randomize_deck_post_effect(&vj.deck_b);
             }
             break;
-            
+
+        // ===== NEW EFFECT CONTROLS =====
+
+        // Trails toggle (y/Y)
+        case 'y': case 'Y':
+            vj.trails_enabled = !vj.trails_enabled;
+            if (!vj.trails_enabled && vj.trails_buffer) {
+                memset(vj.trails_buffer, ' ', vj.width * vj.height);
+            }
+            break;
+
+        // Audio Grid toggle (;)
+        case ';':
+            vj.audio_grid_enabled = !vj.audio_grid_enabled;
+            break;
+
+        // Text Overlay trigger (')
+        case '\'':
+            trigger_text_overlay();
+            break;
+
+        // Zoom Punch trigger (/)
+        case '/':
+            trigger_zoom_punch(0.3f);
+            break;
+
+        // Ikeda Mode toggle (\)
+        case '\\':
+            vj.ikeda_mode = !vj.ikeda_mode;
+            break;
+
+        // Server Burst trigger (`)
+        case '`':
+            trigger_server_burst(1.0f);
+            break;
+
+        // 3D Overlay toggle (.)
+        case '.':
+            vj.overlay_3d_enabled = !vj.overlay_3d_enabled;
+            if (vj.overlay_3d_enabled) {
+                vj.overlay_3d_scale = 0.5f + (float)rand() / RAND_MAX * 1.5f;
+            }
+            break;
+
+        // Grid Freeze toggle (,)
+        case ',':
+            toggle_grid_freeze();
+            break;
+
+        // Grid Crop/Zoom toggle (<)
+        case '<':
+            vj.grid_crop_enabled = !vj.grid_crop_enabled;
+            if (vj.grid_crop_enabled && vj.grid_crop_zoom) {
+                for (int i = 0; i < 9; i++) {
+                    vj.grid_crop_zoom[i] = 0.5f + (float)rand() / RAND_MAX * 1.5f;
+                }
+            }
+            break;
+
+        // Crossfade mode cycle (>)
+        case '>':
+            randomize_crossfade_mode();
+            break;
+
+        // Color Fill trigger (|)
+        case '|':
+            trigger_color_fill();
+            break;
+
         // UI page navigation
         case '\t':  // Tab key - Next page
             vj.current_ui_page = (vj.current_ui_page + 1) % UI_PAGE_COUNT;
@@ -17921,23 +19723,48 @@ int main(int argc, char* argv[]) {
     
     // Parse command line arguments
     bool start_hidden = false;
+    bool auto_start_websocket = false;
+    int cli_port = 20000;  // Default port
+    char cli_host[64] = "0.0.0.0";  // Default host (bind to all interfaces)
+
     fprintf(stderr, "DEBUG: Parsing %d command line arguments\n", argc);
     fflush(stderr);
-    
+
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--hide-ui") == 0 || strcmp(argv[i], "--fullscreen") == 0 || strcmp(argv[i], "-h") == 0) {
+        if (strcmp(argv[i], "--hide-ui") == 0 || strcmp(argv[i], "--fullscreen") == 0) {
             start_hidden = true;
-        } else if (strcmp(argv[i], "--help") == 0) {
-            printf("CLIFT VJ Software\n");
-            printf("Usage: %s [options]\n", argv[0]);
+        } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
+            strncpy(cli_host, argv[++i], sizeof(cli_host) - 1);
+            cli_host[sizeof(cli_host) - 1] = '\0';
+            auto_start_websocket = true;
+        } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            cli_port = atoi(argv[++i]);
+            auto_start_websocket = true;
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printf("CLIFT VJ Software - Terminal Edition\n");
+            printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
-            printf("  --hide-ui, --fullscreen, -h  Start with UI hidden (full-screen mode)\n");
-            printf("  --help                       Show this help message\n");
-            printf("\nControls:\n");
+            printf("  --hide-ui, --fullscreen  Start with UI hidden (full-screen mode)\n");
+            printf("  --host <ip>              WebSocket server bind address (default: 0.0.0.0)\n");
+            printf("  --port <port>            WebSocket server port (default: 20000)\n");
+            printf("  -h, --help               Show this help message\n");
+            printf("\nExample:\n");
+            printf("  %s --host 192.168.1.42 --port 20000\n\n", argv[0]);
+            printf("Controls:\n");
             printf("  U - Toggle UI visibility\n");
             printf("  F - Full auto mode\n");
+            printf("  W - Toggle WebSocket server (on Monitor page)\n");
             printf("  H - Show/hide help\n");
             printf("  Q - Quit\n");
+            printf("\nNew Effect Controls:\n");
+            printf("  y - Toggle Trails        ; - Toggle Audio Grid\n");
+            printf("  ' - Text Overlay         / - Zoom Punch\n");
+            printf("  \\ - Toggle Ikeda Mode    ` - Server Burst\n");
+            printf("  . - Toggle 3D Overlay    , - Toggle Grid Freeze\n");
+            printf("  < - Grid Crop/Zoom       > - Cycle Crossfade Mode\n");
+            printf("  | - Color Fill\n");
+            printf("\nAudio:\n");
+            printf("  Requires PipeWire. Install with: pacman -S pipewire pipewire-pulse\n");
             return 0;
         }
     }
@@ -17987,10 +19814,45 @@ int main(int argc, char* argv[]) {
     fflush(stderr);
     
     vj_init(width, height, start_hidden);
-    
+
     fprintf(stderr, "DEBUG: vj_init completed successfully\n");
     fflush(stderr);
-    
+
+    // Apply command line WebSocket settings
+    vj.live_coding.port = cli_port;
+    strncpy(vj.live_coding.host, cli_host, sizeof(vj.live_coding.host) - 1);
+    vj.live_coding.host[sizeof(vj.live_coding.host) - 1] = '\0';
+
+    // Auto-start WebSocket if host/port specified on command line
+    if (auto_start_websocket) {
+        vj.live_coding.enabled = true;
+        // If host is not 0.0.0.0, use CLIENT mode (connect TO server)
+        if (strcmp(cli_host, "0.0.0.0") != 0) {
+            vj.live_coding.client_mode = true;
+            fprintf(stderr, "DEBUG: Connecting to WebSocket server at %s:%d\n", cli_host, cli_port);
+            fflush(stderr);
+            start_websocket_client();
+        } else {
+            // Server mode (BE a server)
+            vj.live_coding.client_mode = false;
+            fprintf(stderr, "DEBUG: Starting WebSocket server on %s:%d\n", cli_host, cli_port);
+            fflush(stderr);
+            start_websocket_server();
+        }
+
+        // Auto-enable audio capture for live performance
+        vj.audio_enabled = true;
+        start_audio_capture();
+        fprintf(stderr, "DEBUG: Audio capture auto-started\n");
+
+        // Auto-enable full auto mode for live performance
+        vj.full_auto_mode = true;
+        vj.live_coding.display_overlay = true;
+        vj.hide_ui = true;  // Fullscreen visuals by default
+        fprintf(stderr, "DEBUG: Full auto mode + overlay + fullscreen auto-started\n");
+        fflush(stderr);
+    }
+
     // Animated CLIFT splash screen
     if (!start_hidden) {
         clear();
