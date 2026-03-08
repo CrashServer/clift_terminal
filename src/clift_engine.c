@@ -21,6 +21,10 @@
 #include <openssl/buffer.h>
 #include "link_wrapper.hpp"
 #include "audio_pipewire.h"
+#include "installation_director.h"
+#include "installation_scenes.h"
+#include "data_feeds.h"
+#include "simulated_audio.h"
 
 // ============= CLIFT (CLI-Shift) ENGINE =============
 
@@ -407,11 +411,24 @@ typedef struct {
     bool auto_3d;
     int beat_count;             // Total beats counted
     int active_charset;         // Current charset index for cycling (0-5)
+
+    // Installation mode
+    bool installation_mode;
 } CLIFTEngine;
 
 // Global engine
 CLIFTEngine vj;
 bool running = true;
+
+// Installation mode director
+Director g_director;
+static float install_feed_poll_timer = 0.0f;
+
+// Live coding text globals (shared with installation_scenes.c)
+extern char g_live_code_svdk[4096];
+extern char g_live_code_zbdm[4096];
+extern bool g_live_code_fresh[2];
+extern bool g_beat_detected;
 
 // Constants for buffer sizes
 #define MAX_WIDTH 256
@@ -16832,12 +16849,13 @@ void vj_render() {
             continue;
         }
         
-        if (deck->scene_id < 0 || deck->scene_id > 189) {
+        if (deck->scene_id < 0 || deck->scene_id > 259) {
             deck->scene_id = 0;  // Reset to safe scene
         }
         
         // Audio pointer for all scenes
-        AudioData* aud = vj.audio_enabled ? &vj.audio_data : NULL;
+        // In installation mode, simulated audio is always valid even without PipeWire
+        AudioData* aud = (vj.audio_enabled || vj.installation_mode) ? &vj.audio_data : NULL;
 
         // Render scene
         switch (deck->scene_id) {
@@ -17068,10 +17086,104 @@ void vj_render() {
             case 187: scene_audio_waveform_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
             case 188: scene_audio_matrix_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
             case 189: scene_audio_reactive_fractals(deck->buffer, deck->zbuffer, vj.width, vj.height, vj.time, deck->params, aud); break;
-                
+
+            // Installation mode scenes (190-197)
+            case 190: scene_boot_sequence(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 191: scene_recovery_scan(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 192: scene_error_cascade(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 193: scene_stock_crash(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 194: scene_philosophical_drift(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 195: scene_news_feed(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 196: scene_mastodon_intercept(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 197: scene_wifi_survey(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 198: scene_server_mockery(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 199: scene_network_map(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 200: scene_wireframe_3d(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 201: scene_roguelike(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 202: scene_big_text(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 203: scene_scifi_terminal(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
+            // Phase 6: Massive expansion (204-215)
+            case 204: scene_surveillance_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 205: scene_cpu_schematic(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 206: scene_audio_dashboard(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 207: scene_data_transfer(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 208: scene_wafer_map(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 209: scene_server_room(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 210: scene_panopticon(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 211: scene_split_dashboard(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 212: scene_lore_narrative(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 213: scene_hex_dump(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 214: scene_motion_analyzer(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 215: scene_consciousness_stream(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
+            // Phase 7: Dynamic action + archived content (216-227)
+            case 216: scene_vertical_scroller(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 217: scene_explosion_montage(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 218: scene_cric_meta(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 219: scene_social_feed(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 220: scene_propaganda_broadcast(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 221: scene_poetry_display(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 222: scene_faction_war(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 223: scene_code_rain_install(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 224: scene_timeline_scroll(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 225: scene_news_wall(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 226: scene_system_overload(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 227: scene_space_battle(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
+            // Phase 8: Aggressive philosophy + retro + pulsation (228-239)
+            case 228: scene_taz_zone(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 229: scene_retro_arcade(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 230: scene_simulacra(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 231: scene_rhizome(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 232: scene_truth_machine(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 233: scene_biometric_harvest(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 234: scene_belief_engine(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 235: scene_tetris_rain(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 236: scene_flash_manifesto(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 237: scene_discipline_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 238: scene_pirate_radio(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 239: scene_final_warning(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
+            // Phase 9: Lore, markets, science, ecosystem (240-259)
+            case 240: scene_crypto_ticker(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 241: scene_neural_fusion(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 242: scene_europa_descent(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 243: scene_ecosystem_monitor(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 244: scene_market_meltdown(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 245: scene_barcelona_uprising(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 246: scene_dna_sequencer(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 247: scene_blockchain_explorer(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 248: scene_love_virus(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 249: scene_particle_accelerator(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 250: scene_edsa_control(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 251: scene_quantum_field_analysis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 252: scene_server_diagnostics(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 253: scene_climate_collapse(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 254: scene_crash_voice(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 255: scene_spectral_analysis(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 256: scene_network_topology(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 257: scene_memory_palace(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 258: scene_cosmic_background(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 259: scene_reisub_sequence(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 260: scene_world_map(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 261: scene_country_intel(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 262: scene_geopolitical_drift(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 263: scene_server_speaks(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 264: scene_server_face(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 265: scene_organic_eye(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 266: scene_face_gallery(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 267: scene_human_figures(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 268: scene_face_morph(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
+            // Live coding performance scenes (269-271)
+            case 269: scene_live_spectrum(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 270: scene_live_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+            case 271: scene_live_pulse(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
+
             default:
                 // Fallback to audio bars for any undefined scenes
-                scene_audio_bars(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, NULL);
+                scene_audio_bars(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud);
                 break;
         }
         
@@ -19714,6 +19826,90 @@ void vj_handle_input() {
     }
 }
 
+// ============= INSTALLATION MODE =============
+
+// Called by installation_director.c to apply director state to the engine
+void director_apply_to_engine(Director* dir) {
+    vj.deck_a.scene_id = (dir->forced_scene > 0) ? dir->forced_scene : dir->deck_a_scene;
+    vj.deck_b.scene_id = dir->deck_b_scene;
+    vj.deck_a.post_effect = (PostEffect)dir->deck_a_effect;
+    vj.deck_b.post_effect = (PostEffect)dir->deck_b_effect;
+    vj.active_charset = dir->charset;
+    vj.crossfade_mode = dir->crossfade_mode;
+
+    // Apply colors and gradients
+    vj.deck_a.primary_color = dir->deck_a_primary_color;
+    vj.deck_a.secondary_color = dir->deck_a_secondary_color;
+    vj.deck_b.primary_color = dir->deck_b_primary_color;
+    vj.deck_b.secondary_color = dir->deck_b_secondary_color;
+    vj.deck_a.gradient_type = (GradientType)dir->deck_a_gradient;
+    vj.deck_b.gradient_type = (GradientType)dir->deck_b_gradient;
+
+    // During transitions, sweep crossfader
+    if (dir->transitioning) {
+        float t = dir->transition_elapsed / dir->transition_duration;
+        if (t < 0.5f) {
+            vj.crossfader = t * 2.0f;
+        } else {
+            vj.crossfader = (1.0f - t) * 2.0f;
+        }
+    } else {
+        if (vj.crossfade_mode == 0) {
+            vj.crossfader = 0.0f;
+        }
+    }
+}
+
+// Handle input during installation mode
+static void installation_handle_input(void) {
+    int ch = getch();
+    if (ch == ERR) return;
+
+    switch (ch) {
+        case 'q':
+        case 'Q':
+            running = false;
+            break;
+        case 'i':
+        case 'I':
+            // Toggle debug info overlay
+            vj.hide_ui = !vj.hide_ui;
+            break;
+        case 'p':
+        case 'P':
+        case ' ':
+            // Toggle pause (hold current mode)
+            g_director.paused = !g_director.paused;
+            break;
+        case 'n':
+        case KEY_RIGHT:
+            // Skip to next mode
+            g_director.paused = true;
+            g_director.forced_scene = 0;  // clear scene lock
+            director_select_mode(&g_director);
+            g_director.current_mode = g_director.next_mode;
+            g_director.mode_elapsed = 0.0f;
+            g_director.boot_complete = true;
+            director_configure_mode(&g_director);
+            director_apply_to_engine(&g_director);
+            break;
+        case 'N':
+        case KEY_LEFT:
+            // Go back to previous mode
+            if (g_director.previous_mode != g_director.current_mode) {
+                g_director.paused = true;
+                g_director.forced_scene = 0;
+                DirectorMode prev = g_director.previous_mode;
+                g_director.previous_mode = g_director.current_mode;
+                g_director.current_mode = prev;
+                g_director.mode_elapsed = 0.0f;
+                director_configure_mode(&g_director);
+                director_apply_to_engine(&g_director);
+            }
+            break;
+    }
+}
+
 // ============= MAIN APPLICATION =============
 
 int main(int argc, char* argv[]) {
@@ -19724,6 +19920,13 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments
     bool start_hidden = false;
     bool auto_start_websocket = false;
+    bool start_installation = false;
+    bool start_cinematic = false;     // --director: cinematic scripted mode
+    bool start_live = false;          // --live: live coding performance mode
+    float installation_speed = 0.0f;  // 0 = default, >0 = target avg seconds per scene
+    bool installation_hold = false;
+    int installation_scene = 0;       // --scene <id>: jump to scene, 0 = none
+    char installation_mode_name[64] = "";  // --mode <name>: jump to director mode
     int cli_port = 20000;  // Default port
     char cli_host[64] = "0.0.0.0";  // Default host (bind to all interfaces)
 
@@ -19733,6 +19936,36 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--hide-ui") == 0 || strcmp(argv[i], "--fullscreen") == 0) {
             start_hidden = true;
+        } else if (strcmp(argv[i], "--installation") == 0) {
+            start_installation = true;
+            start_hidden = true;  // installation always runs fullscreen
+        } else if (strcmp(argv[i], "--director") == 0) {
+            start_installation = true;
+            start_cinematic = true;
+            start_hidden = true;  // cinematic always runs fullscreen
+        } else if (strcmp(argv[i], "--live") == 0) {
+            start_installation = true;
+            start_live = true;
+            start_hidden = true;  // live mode always runs fullscreen
+            auto_start_websocket = true;  // need websocket for live coding data
+        } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
+            installation_speed = (float)atof(argv[++i]);
+            if (installation_speed < 1.0f) installation_speed = 1.0f;
+        } else if (strcmp(argv[i], "--hold") == 0) {
+            installation_hold = true;
+            start_installation = true;
+            start_hidden = true;
+        } else if (strcmp(argv[i], "--scene") == 0 && i + 1 < argc) {
+            installation_scene = atoi(argv[++i]);
+            installation_hold = true;  // --scene implies hold
+            start_installation = true;
+            start_hidden = true;
+        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+            strncpy(installation_mode_name, argv[++i], sizeof(installation_mode_name) - 1);
+            installation_mode_name[sizeof(installation_mode_name) - 1] = '\0';
+            installation_hold = true;  // --mode implies hold
+            start_installation = true;
+            start_hidden = true;
         } else if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
             strncpy(cli_host, argv[++i], sizeof(cli_host) - 1);
             cli_host[sizeof(cli_host) - 1] = '\0';
@@ -19740,15 +19973,26 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             cli_port = atoi(argv[++i]);
             auto_start_websocket = true;
+        } else if (strcmp(argv[i], "--enable-websocket") == 0) {
+            auto_start_websocket = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             printf("CLIFT VJ Software - Terminal Edition\n");
             printf("Usage: %s [options]\n\n", argv[0]);
             printf("Options:\n");
             printf("  --hide-ui, --fullscreen  Start with UI hidden (full-screen mode)\n");
+            printf("  --installation           Autonomous installation mode (beamer/Pi)\n");
+            printf("  --director               Cinematic mode: scripted narrative with face narration\n");
+            printf("  --live                   Live coding performance mode (Ikeda-style, beat-synced)\n");
+            printf("  --speed <seconds>        Avg scene duration in installation/director mode (default: ~7)\n");
+            printf("  --hold                   Pause director (no auto-advance between modes)\n");
+            printf("  --scene <id>             Jump to scene ID and hold (implies --installation --hold)\n");
+            printf("  --mode <name>            Jump to director mode by name and hold (e.g. WORLD_MAP)\n");
             printf("  --host <ip>              WebSocket server bind address (default: 0.0.0.0)\n");
             printf("  --port <port>            WebSocket server port (default: 20000)\n");
+            printf("  --enable-websocket       Enable WebSocket (server on 0.0.0.0:20000 by default)\n");
             printf("  -h, --help               Show this help message\n");
-            printf("\nExample:\n");
+            printf("\nExamples:\n");
+            printf("  %s --installation --enable-websocket\n", argv[0]);
             printf("  %s --host 192.168.1.42 --port 20000\n\n", argv[0]);
             printf("Controls:\n");
             printf("  U - Toggle UI visibility\n");
@@ -19817,6 +20061,105 @@ int main(int argc, char* argv[]) {
 
     fprintf(stderr, "DEBUG: vj_init completed successfully\n");
     fflush(stderr);
+
+    // Installation mode initialization
+    if (start_installation) {
+        vj.installation_mode = true;
+        vj.hide_ui = true;
+        vj.live_coding.display_overlay = false;  // no BPM/CPU/WS overlay
+
+        // Resolve base directory for data files (works from any CWD)
+        feeds_set_base_dir(argv[0]);
+
+        // Initialize data feeds
+        feeds_init(&g_feeds);
+
+        // Load lore fragments with resolved path
+        {
+            char lore_path[1024];
+            const char* base = feeds_get_base_dir();
+            if (base[0]) {
+                snprintf(lore_path, sizeof(lore_path), "%s/data/lore_fragments.txt", base);
+            } else {
+                snprintf(lore_path, sizeof(lore_path), "data/lore_fragments.txt");
+            }
+            feeds_load_lore(&g_feeds, lore_path);
+        }
+
+        // Initialize installation scenes
+        installation_scenes_init();
+
+        // Initialize director
+        director_init(&g_director);
+        if (installation_speed > 0.0f) {
+            // Scale durations: default avg midpoint across all modes is ~6s
+            // --speed 60 → scale = 10.0, so a [5,10] mode becomes [50,100] avg ~75s
+            g_director.duration_scale = installation_speed / 6.0f;
+        }
+        director_configure_mode(&g_director);
+
+        // Live coding performance mode
+        if (start_live) {
+            director_start_live(&g_director);
+            vj.live_coding.display_overlay = false;  // code embedded in scenes, not overlaid
+        }
+        // Cinematic director mode: scripted beat sequence
+        else if (start_cinematic) {
+            if (installation_scene > 0) {
+                fprintf(stderr, "WARNING: --scene is incompatible with --director, ignoring --scene\n");
+            }
+            if (installation_mode_name[0] != '\0') {
+                fprintf(stderr, "WARNING: --mode is incompatible with --director, ignoring --mode\n");
+            }
+            director_start_cinematic(&g_director);
+            // --hold works with --director: pauses cinematic at beat 0
+            if (installation_hold) {
+                g_director.paused = true;
+                g_director.mode_elapsed = 0.0f;
+            }
+        } else {
+            // Installation mode: apply --hold, --scene, --mode flags
+            if (installation_scene > 0) {
+                // Jump directly to scene, skip boot
+                g_director.boot_complete = true;
+                g_director.current_mode = DIR_AMBIENT;
+                g_director.forced_scene = installation_scene;
+                g_director.deck_a_scene = installation_scene;
+                g_director.mode_elapsed = 0.0f;
+                director_configure_mode(&g_director);
+            }
+            if (installation_mode_name[0] != '\0') {
+                // Lookup mode by name
+                DirectorMode target = DIR_AMBIENT;  // fallback
+                bool found = false;
+                for (int m = 0; m < DIR_MODE_COUNT; m++) {
+                    if (strcasecmp(director_mode_name((DirectorMode)m), installation_mode_name) == 0) {
+                        target = (DirectorMode)m;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    fprintf(stderr, "WARNING: unknown mode '%s', falling back to AMBIENT\n", installation_mode_name);
+                }
+                g_director.boot_complete = true;
+                g_director.current_mode = target;
+                g_director.mode_elapsed = 0.0f;
+                g_director.mode_duration = 999999.0f;  // won't auto-advance
+                director_configure_mode(&g_director);
+            }
+            if (installation_hold) {
+                g_director.paused = true;
+                g_director.mode_elapsed = 0.0f;
+            }
+        }
+
+        director_apply_to_engine(&g_director);
+
+        fprintf(stderr, "DEBUG: %s mode initialized (director + feeds + scenes)\n",
+                start_cinematic ? "Cinematic director" : "Installation");
+        fflush(stderr);
+    }
 
     // Apply command line WebSocket settings
     vj.live_coding.port = cli_port;
@@ -19926,15 +20269,71 @@ int main(int argc, char* argv[]) {
     
     while (running) {
         clock_gettime(CLOCK_MONOTONIC, &current_time);
-        float dt = (current_time.tv_sec - last_time.tv_sec) + 
+        float dt = (current_time.tv_sec - last_time.tv_sec) +
                    (current_time.tv_nsec - last_time.tv_nsec) / 1000000000.0f;
         last_time = current_time;
-        
-        vj_update(dt);
-        vj_render();
-        vj_render_ui();
-        vj_handle_input();
-        
+
+        if (vj.installation_mode) {
+            // Installation mode: director drives everything
+            // Simulated audio when no PipeWire
+            if (!vj.audio_enabled) {
+                simulated_audio_update(&vj.audio_data, vj.time, g_director.global_intensity);
+                vj.audio_data.valid = true;
+            }
+
+            // Update live coding globals for scene access
+            if (g_director.live_mode) {
+                strncpy(g_live_code_svdk, vj.live_coding.players[0].current_code, 4095);
+                g_live_code_svdk[4095] = '\0';
+                strncpy(g_live_code_zbdm, vj.live_coding.players[1].current_code, 4095);
+                g_live_code_zbdm[4095] = '\0';
+                g_live_code_fresh[0] = vj.live_coding.players[0].is_fresh;
+                g_live_code_fresh[1] = vj.live_coding.players[1].is_fresh;
+            }
+
+            // Update beat flag for director (live mode beat-synced transitions)
+            g_beat_detected = (vj.audio_data.valid && vj.audio_data.beat_detected) ||
+                              vj.live_coding.ws_beat_triggered;
+
+            // Update director (selects modes, drives transitions)
+            director_update(&g_director, dt);
+
+            // Poll data feeds every 10 seconds
+            install_feed_poll_timer += dt;
+            if (install_feed_poll_timer > 10.0f) {
+                int old_device_count = g_feeds.device_count;
+                feeds_poll(&g_feeds);
+                install_feed_poll_timer = 0.0f;
+
+                // Data-reactive intensity spikes
+                // Mastodon CRITICAL threat
+                for (int i = 0; i < g_feeds.post_count; i++) {
+                    if (strcmp(g_feeds.posts[i].threat_level, "CRITICAL") == 0) {
+                        g_director.intensity_spike = 0.3f;
+                        g_director.intensity_spike_decay = 0.01f; // 30s decay
+                        break;
+                    }
+                }
+                // WiFi device surge
+                if (g_feeds.device_count - old_device_count > 5) {
+                    g_director.intensity_spike = 0.2f;
+                    g_director.intensity_spike_decay = 0.02f; // 10s decay
+                }
+            }
+
+            // Standard update/render pipeline
+            vj_update(dt);
+            vj_render();
+            vj_render_ui();
+            installation_handle_input();
+        } else {
+            // Normal VJ mode
+            vj_update(dt);
+            vj_render();
+            vj_render_ui();
+            vj_handle_input();
+        }
+
         usleep(16667);  // ~60 FPS
     }
     
