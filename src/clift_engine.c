@@ -1,5 +1,8 @@
+#define _XOPEN_SOURCE 600
 #define _DEFAULT_SOURCE
 #include <ncurses.h>
+#include <locale.h>
+#include <wchar.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,8 +28,13 @@
 #include "installation_scenes.h"
 #include "data_feeds.h"
 #include "simulated_audio.h"
+#include "surface_scenes.h"
 
 // ============= CLIFT (CLI-Shift) ENGINE =============
+
+// Surface rendering: color pair = 11 + fg*8 + bg (pairs 11-74)
+// ▀ half-block: foreground = top pixel, background = bottom pixel
+#define SURFACE_PAIR(top_color, bot_color) (11 + (top_color) * 8 + (bot_color))
 
 // Audio analysis data
 typedef struct {
@@ -101,6 +109,44 @@ typedef enum {
     GRADIENT_COUNT = 10
 } GradientType;
 
+// Surface rendering palettes (intensity → color index mapping)
+typedef enum {
+    PALETTE_HEAT = 0,      // BLACK→RED→YELLOW→WHITE
+    PALETTE_COOL,          // BLACK→BLUE→CYAN→WHITE
+    PALETTE_MATRIX,        // BLACK→GREEN→GREEN→WHITE
+    PALETTE_CYBERPUNK,     // BLACK→MAGENTA→CYAN→WHITE
+    PALETTE_FIRE,          // BLACK→RED→YELLOW→YELLOW
+    PALETTE_MONO,          // BLACK→BLACK→WHITE→WHITE
+    PALETTE_OCEAN,         // BLACK→BLUE→CYAN→WHITE
+    PALETTE_NEON,          // BLACK→MAGENTA→GREEN→WHITE
+    PALETTE_COUNT
+} SurfacePalette;
+
+const char* surface_palette_names[] = {
+    "Heat", "Cool", "Matrix", "Cyber", "Fire", "Mono", "Ocean", "Neon"
+};
+
+// Map intensity (0.0-1.0) to ncurses color index (0-7) via 4-stop palette ramp
+// ncurses: 0=BLACK, 1=RED, 2=GREEN, 3=YELLOW, 4=BLUE, 5=MAGENTA, 6=CYAN, 7=WHITE
+static uint8_t palette_map(float intensity, int palette) {
+    if (intensity < 0.0f) intensity = 0.0f;
+    if (intensity > 1.0f) intensity = 1.0f;
+    static const uint8_t ramps[PALETTE_COUNT][4] = {
+        {0, 1, 3, 7},  // HEAT:      BLACK→RED→YELLOW→WHITE
+        {0, 4, 6, 7},  // COOL:      BLACK→BLUE→CYAN→WHITE
+        {0, 2, 2, 7},  // MATRIX:    BLACK→GREEN→GREEN→WHITE
+        {0, 5, 6, 7},  // CYBERPUNK: BLACK→MAGENTA→CYAN→WHITE
+        {0, 1, 3, 3},  // FIRE:      BLACK→RED→YELLOW→YELLOW
+        {0, 0, 7, 7},  // MONO:      BLACK→BLACK→WHITE→WHITE
+        {0, 4, 6, 7},  // OCEAN:     BLACK→BLUE→CYAN→WHITE
+        {0, 5, 2, 7},  // NEON:      BLACK→MAGENTA→GREEN→WHITE
+    };
+    int p = palette % PALETTE_COUNT;
+    int idx = (int)(intensity * 3.99f);
+    if (idx > 3) idx = 3;
+    return ramps[p][idx];
+}
+
 // Gradient type names for UI display
 const char* gradient_names[] = {
     "Lin-H", "Lin-V", "Diag1", "Diag2", "Radial", 
@@ -131,6 +177,11 @@ typedef struct {
     int primary_color;    // Primary color pair (1-7)
     int secondary_color;  // Secondary color pair for intensity
     GradientType gradient_type;  // How to blend the two colors
+    // Surface rendering
+    uint8_t* surface_color;      // Color buffer: width * (height*2) for half-block pixels
+    bool surface_mode;           // Set per-frame by surface scenes
+    bool force_surface_mode;     // User toggle: convert ASCII → surface
+    int surface_palette;         // SurfacePalette index
 } CLIFTDeck;
 
 // Crossfade states for simple 3-state mixing
@@ -414,6 +465,10 @@ typedef struct {
 
     // Installation mode
     bool installation_mode;
+
+    // Surface rendering
+    uint8_t* surface_output;        // Composited surface color buffer: width * (height*2)
+    bool surface_render_active;     // True if either deck has surface_mode
 } CLIFTEngine;
 
 // Global engine
@@ -517,6 +572,18 @@ const char* scene_names[] = {
     "Audio 3D Cubes", "Audio Strobes", "Audio Explosions", "Audio Wave Tunnel", "Audio Spectrum 3D",
     "Audio Particles", "Audio Pulse Rings", "Audio Waveform 3D", "Audio Matrix Grid", "Audio Fractals"
 };
+
+// Surface scene names (280-289)
+static const char* surface_scene_names[] = {
+    "Color Wash", "Gradient Sweep", "Audio Pulse", "Color Blocks", "Wave Surface",
+    "Breathing", "Mondrian", "Aurora", "Heat Map", "Strobe Fields"
+};
+
+static const char* get_scene_name(int scene_id) {
+    if (scene_id >= 280 && scene_id <= 289) return surface_scene_names[scene_id - 280];
+    if (scene_id >= 0 && scene_id < 190) return scene_names[scene_id];
+    return "Unknown";
+}
 
 const char* post_effect_names[] = {
     "None", "Glow", "Blur", "Edge", "Invert", "ASCII", "Scanlines", 
@@ -15866,9 +15933,22 @@ void vj_init(int width, int height, bool start_hidden) {
         exit(1);
     }
     
+    // Surface rendering buffers (doubled height for half-block pixels)
+    int surface_size = vj.width * vj.terminal_height * 2;
+    vj.deck_a.surface_color = calloc(surface_size, sizeof(uint8_t));
+    vj.deck_b.surface_color = calloc(surface_size, sizeof(uint8_t));
+    vj.surface_output = calloc(surface_size, sizeof(uint8_t));
+    vj.deck_a.surface_mode = false;
+    vj.deck_b.surface_mode = false;
+    vj.deck_a.force_surface_mode = false;
+    vj.deck_b.force_surface_mode = false;
+    vj.deck_a.surface_palette = PALETTE_HEAT;
+    vj.deck_b.surface_palette = PALETTE_HEAT;
+    vj.surface_render_active = false;
+
     fprintf(stderr, "DEBUG: All buffers allocated successfully\n");
     fflush(stderr);
-    
+
     vj.crossfade_state = XFADE_FULL_A;  // Start with deck A only
     param_init(&vj.master_volume, "Master Vol", 1.0f, 0.0f, 2.0f);
     param_init(&vj.master_speed, "Master Speed", 1.0f, 0.1f, 5.0f);
@@ -16849,9 +16929,12 @@ void vj_render() {
             continue;
         }
         
-        if (deck->scene_id < 0 || deck->scene_id > 259) {
+        if (deck->scene_id < 0 || (deck->scene_id > 271 && deck->scene_id < 280) || deck->scene_id > 289) {
             deck->scene_id = 0;  // Reset to safe scene
         }
+
+        // Reset surface mode per-frame (surface scenes set it explicitly)
+        deck->surface_mode = false;
         
         // Audio pointer for all scenes
         // In installation mode, simulated audio is always valid even without PipeWire
@@ -17181,6 +17264,18 @@ void vj_render() {
             case 270: scene_live_grid(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
             case 271: scene_live_pulse(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud); break;
 
+            // Surface scenes (280-289) — write to surface_color buffer, not char buffer
+            case 280: deck->surface_mode = true; surface_scene_color_wash(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 281: deck->surface_mode = true; surface_scene_gradient_sweep(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 282: deck->surface_mode = true; surface_scene_audio_pulse(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 283: deck->surface_mode = true; surface_scene_color_blocks(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 284: deck->surface_mode = true; surface_scene_wave_surface(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 285: deck->surface_mode = true; surface_scene_breathing(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 286: deck->surface_mode = true; surface_scene_mondrian(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 287: deck->surface_mode = true; surface_scene_aurora(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 288: deck->surface_mode = true; surface_scene_heat_map(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+            case 289: deck->surface_mode = true; surface_scene_strobe_fields(deck->surface_color, vj.width, vj.height * 2, deck->params, vj.time, aud); break;
+
             default:
                 // Fallback to audio bars for any undefined scenes
                 scene_audio_bars(deck->buffer, deck->zbuffer, vj.width, vj.height, deck->params, vj.time, aud);
@@ -17305,8 +17400,43 @@ void vj_render() {
                 }
             }
         }
+
+        // === ASCII → SURFACE CONVERTER ===
+        // When force_surface_mode is on and deck is NOT a native surface scene,
+        // convert the ASCII char buffer into a surface_color buffer
+        if (deck->force_surface_mode && !deck->surface_mode) {
+            deck->surface_mode = true;
+            for (int y = 0; y < vj.height; y++) {
+                for (int x = 0; x < vj.width; x++) {
+                    char c = deck->buffer[y * vj.width + x];
+                    float density;
+                    switch (c) {
+                        case ' ':           density = 0.0f; break;
+                        case '.': case '`': density = 0.1f; break;
+                        case '-': case ',': density = 0.15f; break;
+                        case ':': case ';': density = 0.2f; break;
+                        case '~': case '\'': density = 0.25f; break;
+                        case '"': case '!': density = 0.3f; break;
+                        case '/': case '\\': case '|': density = 0.35f; break;
+                        case '(': case ')': case '[': case ']': density = 0.4f; break;
+                        case '{': case '}': case '<': case '>': density = 0.45f; break;
+                        case '+': case '=': case '*': density = 0.5f; break;
+                        case 'x': case 'X': case 'o': case 'O': density = 0.6f; break;
+                        case '#': case '0': density = 0.7f; break;
+                        case '%': case '&': density = 0.8f; break;
+                        case '@': case 'W': case 'M': density = 0.9f; break;
+                        default: density = (c >= 'a' && c <= 'z') ? 0.4f :
+                                          (c >= 'A' && c <= 'Z') ? 0.5f :
+                                          (c >= '0' && c <= '9') ? 0.35f : 0.3f;
+                    }
+                    uint8_t color = palette_map(density, deck->surface_palette);
+                    deck->surface_color[(2 * y) * vj.width + x] = color;
+                    deck->surface_color[(2 * y + 1) * vj.width + x] = color;
+                }
+            }
+        }
     }
-    
+
     // ===== SMOOTH CROSSFADER (0.0 to 1.0) =====
     // Update crossfader based on mode
     float dt = 0.016f;  // ~60fps
@@ -17370,6 +17500,54 @@ void vj_render() {
                 vj.output_buffer[i] = a;
             } else {
                 vj.output_buffer[i] = b;
+            }
+        }
+    }
+
+    // ===== SURFACE COMPOSITING =====
+    // Determine if surface rendering is active and composite surface buffers
+    bool deck_a_surface = vj.deck_a.surface_mode || vj.deck_a.force_surface_mode;
+    bool deck_b_surface = vj.deck_b.surface_mode || vj.deck_b.force_surface_mode;
+    vj.surface_render_active = deck_a_surface || deck_b_surface;
+
+    if (vj.surface_render_active) {
+        int surface_size = vj.width * vj.height * 2;
+
+        if (deck_a_surface && deck_b_surface) {
+            // Both decks are surface — crossfade between surface buffers
+            if (vj.crossfader <= 0.0f) {
+                memcpy(vj.surface_output, vj.deck_a.surface_color, surface_size);
+            } else if (vj.crossfader >= 1.0f) {
+                memcpy(vj.surface_output, vj.deck_b.surface_color, surface_size);
+            } else {
+                // Dithered crossfade between two surface buffers
+                for (int i = 0; i < surface_size; i++) {
+                    float threshold = vj.crossfader;
+                    int x = i % vj.width;
+                    int y = i / vj.width;
+                    float pattern = sinf(x * 0.2f + y * 0.3f + vj.time * 2.0f) * 0.1f;
+                    if ((float)rand() / RAND_MAX > (threshold + pattern)) {
+                        vj.surface_output[i] = vj.deck_a.surface_color[i];
+                    } else {
+                        vj.surface_output[i] = vj.deck_b.surface_color[i];
+                    }
+                }
+            }
+        } else if (deck_a_surface) {
+            // Only deck A is surface
+            if (vj.crossfader >= 1.0f) {
+                // Full deck B (not surface) — disable surface rendering
+                vj.surface_render_active = false;
+            } else {
+                memcpy(vj.surface_output, vj.deck_a.surface_color, surface_size);
+            }
+        } else {
+            // Only deck B is surface
+            if (vj.crossfader <= 0.0f) {
+                // Full deck A (not surface) — disable surface rendering
+                vj.surface_render_active = false;
+            } else {
+                memcpy(vj.surface_output, vj.deck_b.surface_color, surface_size);
             }
         }
     }
@@ -17856,7 +18034,34 @@ int get_visual_color(char c, CLIFTDeck* deck, float audio_intensity, int x, int 
 void vj_render_ui() {
     // Render live coding overlay first (before main buffer rendering)
     render_live_coding_overlay();
-    
+
+    // ===== SURFACE RENDERING PATH =====
+    // Half-block rendering: ▀ (U+2580) with FG=top pixel, BG=bottom pixel
+    if (vj.surface_render_active && vj.surface_output) {
+        wchar_t half_block[2] = { L'\u2580', L'\0' };
+        cchar_t cc;
+
+        for (int y = 0; y < vj.height; y++) {
+            for (int x = 0; x < vj.width; x++) {
+                uint8_t top = vj.surface_output[(2 * y) * vj.width + x];
+                uint8_t bot = vj.surface_output[(2 * y + 1) * vj.width + x];
+                if (top > 7) top = 7;
+                if (bot > 7) bot = 7;
+                int pair = SURFACE_PAIR(top, bot);
+                setcchar(&cc, half_block, 0, pair, NULL);
+                mvadd_wch(y, x, &cc);
+            }
+        }
+
+        // Skip UI rendering if hidden
+        if (vj.hide_ui) {
+            refresh();
+            return;
+        }
+        goto render_ui_panel;
+    }
+
+    // ===== ASCII RENDERING PATH =====
     // Render main output with enhanced color mapping
     int ov_start = vj.live_coding.overlay_start_y;
     int ov_end = ov_start + vj.live_coding.overlay_num_lines;
@@ -17943,7 +18148,8 @@ void vj_render_ui() {
         refresh();
         return;
     }
-    
+
+render_ui_panel: ;
     // Modern Glass-Style UI
     int ui_y = vj.height;
     const char* color_names[] = {"", "Red", "Grn", "Blu", "Yel", "Mag", "Cyn", "Wht"};
@@ -18004,7 +18210,7 @@ void vj_render_ui() {
         
         mvprintw(ui_y + 2, 8, " %s | %02d:%-12.12s | %s>%s | %s | FX:%-8s",
                  deck_a_indicator, vj.deck_a.scene_id, 
-                 scene_names[vj.deck_a.scene_id],
+                 get_scene_name(vj.deck_a.scene_id),
                  color_names[vj.deck_a.primary_color], 
                  color_names[vj.deck_a.secondary_color],
                  gradient_names[vj.deck_a.gradient_type],
@@ -18020,7 +18226,7 @@ void vj_render_ui() {
         
         mvprintw(ui_y + 3, 8, " %s | %02d:%-12.12s | %s>%s | %s | FX:%-8s",
                  deck_b_indicator, vj.deck_b.scene_id,
-                 scene_names[vj.deck_b.scene_id],
+                 get_scene_name(vj.deck_b.scene_id),
                  color_names[vj.deck_b.primary_color], 
                  color_names[vj.deck_b.secondary_color],
                  gradient_names[vj.deck_b.gradient_type],
@@ -18032,14 +18238,14 @@ void vj_render_ui() {
         // Fallback for no color
         mvprintw(ui_y + 2, 0, "| DECK A %s | %02d:%-12.12s | %s>%s | %s | FX:%-8s |",
                  deck_a_indicator, vj.deck_a.scene_id, 
-                 scene_names[vj.deck_a.scene_id],
+                 get_scene_name(vj.deck_a.scene_id),
                  color_names[vj.deck_a.primary_color], 
                  color_names[vj.deck_a.secondary_color],
                  gradient_names[vj.deck_a.gradient_type],
                  post_effect_names[vj.deck_a.post_effect]);
         mvprintw(ui_y + 3, 0, "| DECK B %s | %02d:%-12.12s | %s>%s | %s | FX:%-8s |",
                  deck_b_indicator, vj.deck_b.scene_id,
-                 scene_names[vj.deck_b.scene_id],
+                 get_scene_name(vj.deck_b.scene_id),
                  color_names[vj.deck_b.primary_color], 
                  color_names[vj.deck_b.secondary_color],
                  gradient_names[vj.deck_b.gradient_type],
@@ -18072,13 +18278,24 @@ void vj_render_ui() {
             const char* category_names[] = {"Basic", "Geometric", "Organic", "Text/Code", "Abstract", "Tunnels", "Nature", "Explosions", "Cities", "Freestyle", "Human", "Warfare", "Revolution&Eyes", "Film Noir", "Escher 3D", "Ikeda", "Giger", "Revolt", "Audio React"};
             int current_scene_id = vj.selected_deck == 0 ? vj.deck_a.scene_id : vj.deck_b.scene_id;
             int current_category = current_scene_id / 10;
-            
-            mvprintw(ui_y + 7, 0, "| %s (%d0-%d9) | Active: DECK %c | Scene: %02d-%-15.15s        |", 
-                     category_names[current_category], 
-                     current_category, current_category,
-                     vj.selected_deck == 0 ? 'A' : 'B',
-                     current_scene_id,
-                     scene_names[current_scene_id]);
+            const char* cat_name = (current_category == 28) ? "Surface" :
+                                   (current_category < 19) ? category_names[current_category] : "Unknown";
+            CLIFTDeck* ui_deck = vj.selected_deck == 0 ? &vj.deck_a : &vj.deck_b;
+
+            if (ui_deck->surface_mode || ui_deck->force_surface_mode) {
+                mvprintw(ui_y + 7, 0, "| %s (%d0-%d9) | DECK %c [S] %s | Scene: %02d-%-12.12s     |",
+                         cat_name, current_category, current_category,
+                         vj.selected_deck == 0 ? 'A' : 'B',
+                         surface_palette_names[ui_deck->surface_palette],
+                         current_scene_id,
+                         get_scene_name(current_scene_id));
+            } else {
+                mvprintw(ui_y + 7, 0, "| %s (%d0-%d9) | Active: DECK %c | Scene: %02d-%-15.15s        |",
+                         cat_name, current_category, current_category,
+                         vj.selected_deck == 0 ? 'A' : 'B',
+                         current_scene_id,
+                         get_scene_name(current_scene_id));
+            }
             mvprintw(ui_y + 8, 0, "| A/B=Deck | 0-9=Scene | PgUp/Dn=Category | V/N=Colors | G=Grad | T=TapBPM |");
             mvprintw(ui_y + 9, 0, "| X/Z/C/M=XFade | Left/Right=Interval±4 | [/]=Interval±1 | F=FullAuto      |");
             break;
@@ -19675,6 +19892,27 @@ void vj_handle_input() {
             vj.current_ui_page = (vj.current_ui_page - 1 + UI_PAGE_COUNT) % UI_PAGE_COUNT;
             break;
         
+        // Surface mode toggle (~)
+        case '~': {
+            CLIFTDeck* deck = vj.selected_deck == 0 ? &vj.deck_a : &vj.deck_b;
+            if (deck->scene_id >= 280 && deck->scene_id <= 289) {
+                // On a native surface scene — go back to scene 0
+                deck->scene_id = 0;
+                deck->force_surface_mode = false;
+            } else {
+                // Toggle force_surface_mode (converts ASCII → surface)
+                deck->force_surface_mode = !deck->force_surface_mode;
+            }
+            break;
+        }
+
+        // Surface palette cycle (?)
+        case '?': {
+            CLIFTDeck* deck = vj.selected_deck == 0 ? &vj.deck_a : &vj.deck_b;
+            deck->surface_palette = (deck->surface_palette + 1) % PALETTE_COUNT;
+            break;
+        }
+
         // Preset management controls
         case 's': case 'S':
             if (vj.current_ui_page == UI_PAGE_PRESETS) {
@@ -19794,11 +20032,14 @@ void vj_handle_input() {
                     vj.selected_preset = MAX_PRESETS - 1;
                 }
             } else {
-                // Previous scene category
+                // Previous scene category (0-18 ASCII, 28 surface)
                 CLIFTDeck* deck = vj.selected_deck == 0 ? &vj.deck_a : &vj.deck_b;
                 int current_category = deck->scene_id / 10;
                 int scene_in_category = deck->scene_id % 10;
-                int new_category = (current_category - 1 + 19) % 19;  // Wrap around to 18 if at 0
+                int new_category;
+                if (current_category == 28) new_category = 18;
+                else if (current_category == 0) new_category = 28;
+                else new_category = current_category - 1;
                 deck->scene_id = new_category * 10 + scene_in_category;
             }
             break;
@@ -19814,11 +20055,14 @@ void vj_handle_input() {
                     vj.selected_preset = MAX_PRESETS - 1;
                 }
             } else {
-                // Next scene category
+                // Next scene category (0-18 ASCII, 28 surface)
                 CLIFTDeck* deck = vj.selected_deck == 0 ? &vj.deck_a : &vj.deck_b;
                 int current_category = deck->scene_id / 10;
                 int scene_in_category = deck->scene_id % 10;
-                int new_category = (current_category + 1) % 19;  // Wrap around to 0 if at 18
+                int new_category;
+                if (current_category == 18) new_category = 28;
+                else if (current_category == 28) new_category = 0;
+                else new_category = current_category + 1;
                 deck->scene_id = new_category * 10 + scene_in_category;
             }
             break;
@@ -19923,6 +20167,7 @@ int main(int argc, char* argv[]) {
     bool start_installation = false;
     bool start_cinematic = false;     // --director: cinematic scripted mode
     bool start_live = false;          // --live: live coding performance mode
+    bool start_surface = false;       // --surface: start on surface scenes
     float installation_speed = 0.0f;  // 0 = default, >0 = target avg seconds per scene
     bool installation_hold = false;
     int installation_scene = 0;       // --scene <id>: jump to scene, 0 = none
@@ -19975,6 +20220,10 @@ int main(int argc, char* argv[]) {
             auto_start_websocket = true;
         } else if (strcmp(argv[i], "--enable-websocket") == 0) {
             auto_start_websocket = true;
+        } else if (strcmp(argv[i], "--surface") == 0) {
+            start_surface = true;
+            vj.deck_a.scene_id = 280;
+            vj.deck_b.scene_id = 281;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             printf("CLIFT VJ Software - Terminal Edition\n");
             printf("Usage: %s [options]\n\n", argv[0]);
@@ -19990,6 +20239,7 @@ int main(int argc, char* argv[]) {
             printf("  --host <ip>              WebSocket server bind address (default: 0.0.0.0)\n");
             printf("  --port <port>            WebSocket server port (default: 20000)\n");
             printf("  --enable-websocket       Enable WebSocket (server on 0.0.0.0:20000 by default)\n");
+            printf("  --surface                Start in surface rendering mode (colored blocks)\n");
             printf("  -h, --help               Show this help message\n");
             printf("\nExamples:\n");
             printf("  %s --installation --enable-websocket\n", argv[0]);
@@ -20015,7 +20265,10 @@ int main(int argc, char* argv[]) {
     
     fprintf(stderr, "DEBUG: Initializing ncurses...\n");
     fflush(stderr);
-    
+
+    // Enable UTF-8 wide character support (required for half-block surface rendering)
+    setlocale(LC_ALL, "");
+
     WINDOW* screen = initscr();
     if (!screen || !stdscr) {
         fprintf(stderr, "ERROR: Failed to initialize ncurses!\n");
@@ -20046,6 +20299,12 @@ int main(int argc, char* argv[]) {
         init_pair(8, COLOR_BLACK, COLOR_RED);        // Inverse for beats
         init_pair(9, COLOR_BLACK, COLOR_GREEN);      // Inverse green
         init_pair(10, COLOR_BLACK, COLOR_BLUE);      // Inverse blue
+
+        // Surface rendering color pairs (11-74): all 64 FG/BG combinations
+        // Used with ▀ half-block: foreground = top pixel, background = bottom pixel
+        for (int fg = 0; fg < 8; fg++)
+            for (int bg = 0; bg < 8; bg++)
+                init_pair(11 + fg * 8 + bg, fg, bg);
     }
     
     int height, width;
@@ -20146,6 +20405,13 @@ int main(int argc, char* argv[]) {
                 g_director.current_mode = target;
                 g_director.mode_elapsed = 0.0f;
                 g_director.mode_duration = 999999.0f;  // won't auto-advance
+                director_configure_mode(&g_director);
+            }
+            if (start_surface) {
+                // --surface with --installation: start on surface wash, skip boot
+                g_director.boot_complete = true;
+                g_director.current_mode = DIR_SURFACE_WASH;
+                g_director.mode_elapsed = 0.0f;
                 director_configure_mode(&g_director);
             }
             if (installation_hold) {

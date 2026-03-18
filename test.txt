@@ -1,0 +1,5 @@
+
+  clift --installation --enable-websocket                              # server on 0.0.0.0:20000
+  clift --installation --enable-websocket --port 9000                  # server on custom port
+  clift --installation --enable-websocket --host 192.168.1.42          # client mode to remote server
+  clift --installation --enable-websocket --host 192.168.1.42 --port 9000

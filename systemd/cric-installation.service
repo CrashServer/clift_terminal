@@ -1,0 +1,20 @@
+[Unit]
+Description=CRIC Installation Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/cric/clift_terminal
+ExecStart=/home/pi/cric/clift_terminal/clift --installation
+Restart=always
+RestartSec=3
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

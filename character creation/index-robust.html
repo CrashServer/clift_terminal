@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MUD Character Creator - Robust v2.0</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>╔═══════════════════════════════════════╗</h1>
+            <h1>║   CHARACTER CREATION TERMINAL v2.0   ║</h1>
+            <h1>║      ROBUST GRID-BASED SYSTEM        ║</h1>
+            <h1>╚═══════════════════════════════════════╝</h1>
+        </header>
+
+        <div class="main-layout">
+            <!-- Character Display -->
+            <div class="character-display">
+                <div class="display-header">┌─[ PREVIEW - 40×50 GRID ]─┐</div>
+                <pre id="characterCanvas" class="ascii-canvas"></pre>
+                <div class="display-footer">└────────────────────────────┘</div>
+            </div>
+
+            <!-- Customization Panel -->
+            <div class="customization-panel">
+                <div class="panel-header">┌─[ CUSTOMIZATION ]─┐</div>
+
+                <div class="option-group">
+                    <label class="option-label">► FACE SHAPE</label>
+                    <select id="faceShape" class="terminal-select">
+                        <option value="oval">Oval</option>
+                        <option value="round">Round</option>
+                        <option value="square">Square</option>
+                        <option value="angular">Angular</option>
+                        <option value="long">Long</option>
+                        <option value="heart">Heart</option>
+                        <option value="diamond">Diamond</option>
+                        <option value="triangular">Triangular</option>
+                        <option value="oblong">Oblong</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► CORPULENCE</label>
+                    <select id="bodyType" class="terminal-select">
+                        <option value="thin">Thin</option>
+                        <option value="average">Average</option>
+                        <option value="athletic">Athletic</option>
+                        <option value="heavy">Heavy</option>
+                        <option value="corpulent">Corpulent</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► EYES</label>
+                    <select id="eyeType" class="terminal-select">
+                        <option value="normal">Normal</option>
+                        <option value="wide">Wide</option>
+                        <option value="narrow">Narrow</option>
+                        <option value="almond">Almond</option>
+                        <option value="hooded">Hooded</option>
+                        <option value="round">Round</option>
+                        <option value="tired">Tired</option>
+                        <option value="deepset">Deep-Set</option>
+                        <option value="protruding">Protruding</option>
+                        <option value="monolid">Monolid</option>
+                        <option value="upturned">Upturned</option>
+                        <option value="downturned">Downturned</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► NOSE</label>
+                    <select id="noseType" class="terminal-select">
+                        <option value="small">Small</option>
+                        <option value="medium">Medium</option>
+                        <option value="large">Large</option>
+                        <option value="hooked">Hooked</option>
+                        <option value="button">Button</option>
+                        <option value="flat">Flat</option>
+                        <option value="pointed">Pointed</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► MOUTH</label>
+                    <select id="mouthType" class="terminal-select">
+                        <option value="small">Small</option>
+                        <option value="normal">Normal</option>
+                        <option value="wide">Wide</option>
+                        <option value="thin">Thin Lips</option>
+                        <option value="full">Full Lips</option>
+                        <option value="smirk">Smirk</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► HAIR STYLE</label>
+                    <select id="hairStyle" class="terminal-select">
+                        <option value="bald">Bald</option>
+                        <option value="short">Short</option>
+                        <option value="medium">Medium</option>
+                        <option value="long">Long</option>
+                        <option value="curly">Curly</option>
+                        <option value="curly-short">Curly Short/Afro</option>
+                        <option value="curly-long">Curly Long</option>
+                        <option value="wavy">Wavy</option>
+                        <option value="wavy-long">Wavy Long</option>
+                        <option value="braided">Braided</option>
+                        <option value="dreadlocks">Dreadlocks</option>
+                        <option value="spiky">Spiky</option>
+                        <option value="ponytail">Ponytail</option>
+                        <option value="bun">Bun</option>
+                        <option value="mohawk">Mohawk</option>
+                        <option value="shaved">Shaved</option>
+                        <option value="pixie">Pixie</option>
+                        <option value="bob">Bob</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► HAIR COLOR</label>
+                    <select id="hairColor" class="terminal-select">
+                        <option value="black">Black</option>
+                        <option value="darkBrown">Dark Brown</option>
+                        <option value="brown">Brown</option>
+                        <option value="lightBrown">Light Brown</option>
+                        <option value="blonde">Blonde</option>
+                        <option value="platinum">Platinum</option>
+                        <option value="red">Red</option>
+                        <option value="auburn">Auburn</option>
+                        <option value="ginger">Ginger</option>
+                        <option value="gray">Gray</option>
+                        <option value="white">White</option>
+                        <option value="blue">Blue</option>
+                        <option value="purple">Purple</option>
+                        <option value="pink">Pink</option>
+                        <option value="green">Green</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► EYE COLOR</label>
+                    <select id="eyeColor" class="terminal-select">
+                        <option value="brown">Brown</option>
+                        <option value="darkBrown">Dark Brown</option>
+                        <option value="hazel">Hazel</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="gray">Gray</option>
+                        <option value="amber">Amber</option>
+                        <option value="violet">Violet</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► SKIN TONE</label>
+                    <select id="skinTone" class="terminal-select">
+                        <option value="pale">Pale</option>
+                        <option value="fair">Fair</option>
+                        <option value="light">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="tan">Tan</option>
+                        <option value="olive">Olive</option>
+                        <option value="brown">Brown</option>
+                        <option value="darkBrown">Dark Brown</option>
+                        <option value="deep">Deep</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► FACIAL HAIR</label>
+                    <select id="facialHair" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="stubble">Stubble</option>
+                        <option value="goatee">Goatee</option>
+                        <option value="full">Full Beard</option>
+                        <option value="mustache">Mustache</option>
+                        <option value="soul">Soul Patch</option>
+                        <option value="mutton">Mutton Chops</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► SCARS</label>
+                    <select id="scars" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="eyebrow">Eyebrow Scar</option>
+                        <option value="cheek">Cheek Scar</option>
+                        <option value="lip">Lip Scar</option>
+                        <option value="nose">Nose Scar</option>
+                        <option value="multiple">Multiple</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► TATTOOS</label>
+                    <select id="tattoos" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="tribal">Tribal Face</option>
+                        <option value="teardrops">Teardrops</option>
+                        <option value="forehead">Forehead Symbol</option>
+                        <option value="cheek">Cheek Marks</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► PIERCINGS</label>
+                    <select id="piercings" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="nose">Nose Ring</option>
+                        <option value="eyebrow">Eyebrow</option>
+                        <option value="lip">Lip Ring</option>
+                        <option value="multiple">Multiple</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► EXPRESSION</label>
+                    <select id="expression" class="terminal-select">
+                        <option value="none">None (Manual)</option>
+                        <option value="joy">Joy</option>
+                        <option value="sadness">Sadness</option>
+                        <option value="anger">Anger</option>
+                        <option value="fear">Fear</option>
+                        <option value="disgust">Disgust</option>
+                        <option value="surprise">Surprise</option>
+                        <option value="contemplative">Contemplative</option>
+                        <option value="mischievous">Mischievous</option>
+                        <option value="sleepy">Sleepy</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► GLASSES</label>
+                    <select id="glasses" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="glassesRound">Round</option>
+                        <option value="glassesSquare">Square</option>
+                        <option value="sunglasses">Sunglasses</option>
+                        <option value="monocle">Monocle</option>
+                        <option value="readingGlasses">Reading Glasses</option>
+                        <option value="aviator">Aviator</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► EARRINGS</label>
+                    <select id="earrings" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="earringStuds">Studs</option>
+                        <option value="earringHoops">Hoops</option>
+                        <option value="earringDangly">Dangly</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► HAT</label>
+                    <select id="hat" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="topHat">Top Hat</option>
+                        <option value="cap">Cap</option>
+                        <option value="beanie">Beanie</option>
+                        <option value="fedora">Fedora</option>
+                        <option value="bandana">Bandana</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► OTHER ACCESSORIES</label>
+                    <select id="otherAccessory" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="headband">Headband</option>
+                        <option value="eyePatch">Eye Patch</option>
+                        <option value="faceMask">Face Mask</option>
+                        <option value="necklace">Necklace</option>
+                        <option value="choker">Choker</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► HAIR PARTING</label>
+                    <select id="hairPart" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="centerPart">Center Part</option>
+                        <option value="sidePart">Side Part</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► BANGS</label>
+                    <select id="bangs" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="straightBangs">Straight Bangs</option>
+                        <option value="sweptBangs">Swept Bangs</option>
+                        <option value="curtainBangs">Curtain Bangs</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► WIND EFFECT</label>
+                    <select id="windEffect" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="windLeft">Wind Left</option>
+                        <option value="windRight">Wind Right</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► VIEW ANGLE</label>
+                    <select id="viewAngle" class="terminal-select">
+                        <option value="front">Front View</option>
+                        <option value="threeFourthLeft">3/4 Left</option>
+                        <option value="threeFourthRight">3/4 Right</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► SHADING</label>
+                    <select id="shading" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="light">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="heavy">Heavy</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► LIGHT DIRECTION</label>
+                    <select id="lightDirection" class="terminal-select">
+                        <option value="front">Front</option>
+                        <option value="topLeft">Top Left</option>
+                        <option value="topRight">Top Right</option>
+                        <option value="top">Top</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► AGE FEATURES</label>
+                    <select id="ageFeatures" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="young">Young</option>
+                        <option value="middleAged">Middle-Aged</option>
+                        <option value="elderly">Elderly</option>
+                        <option value="frecklesOnly">Freckles Only</option>
+                    </select>
+                </div>
+
+                <div class="option-group">
+                    <label class="option-label">► FRECKLES</label>
+                    <select id="freckles" class="terminal-select">
+                        <option value="none">None</option>
+                        <option value="light">Light</option>
+                        <option value="medium">Medium</option>
+                        <option value="heavy">Heavy</option>
+                    </select>
+                </div>
+
+                <div class="panel-footer">└────────────────────┘</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="randomize" class="terminal-button">[ RANDOMIZE ]</button>
+            <button id="export" class="terminal-button">[ EXPORT CHARACTER ]</button>
+        </div>
+
+        <footer style="text-align: center; margin-top: 20px; color: #0a0; font-size: 12px;">
+            <p>Grid-based system • Proper facial proportions • Pixel art inspired</p>
+            <p>40×50 resolution • Procedural composition • Animated features</p>
+            <p>NEW: Expressive emotions • Accessories • Aging features • Enhanced symmetry</p>
+            <p>✨ 3/4 View Angles • Dynamic Lighting • Depth Shading • Facial Contours ✨</p>
+        </footer>
+    </div>
+
+    <script src="face-grid-system.js"></script>
+    <script src="face-features-lib.js"></script>
+    <script src="color-system.js"></script>
+    <script src="face-renderer-robust.js"></script>
+    <script src="animator.js"></script>
+    <script src="main-robust.js"></script>
+</body>
+</html>

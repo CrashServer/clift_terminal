@@ -1,0 +1,17 @@
+[Unit]
+Description=CRIC Feed Fetcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/cric/clift_terminal
+ExecStart=/home/pi/cric/clift_terminal/scripts/feed_fetcher.sh
+Restart=always
+RestartSec=10
+Environment=MASTODON_INSTANCE=mastodon.social
+Environment=MASTODON_KEYWORDS=cyberpunk,technology,resistance,surveillance,hacking
+
+[Install]
+WantedBy=multi-user.target

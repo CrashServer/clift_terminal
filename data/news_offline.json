@@ -1,0 +1,457 @@
+[
+  {
+    "text": "NETWATCH ADVISORY: Sector 7 mesh network compromised — all nodes cycling to backup frequencies",
+    "source": "NETWATCH",
+    "bias": 0.3,
+    "sentiment": -0.4,
+    "emotion": "alert"
+  },
+  {
+    "text": "Facial recognition grid achieves 99.7% accuracy in underground transit zones",
+    "source": "NETWATCH",
+    "bias": 0.5,
+    "sentiment": -0.2,
+    "emotion": "neutral"
+  },
+  {
+    "text": "New biometric passport requirements extend to freelance couriers effective March 1",
+    "source": "NETWATCH",
+    "bias": 0.4,
+    "sentiment": -0.3,
+    "emotion": "concern"
+  },
+  {
+    "text": "NETWATCH deploys AI sentinels across 14 metropolitan corridors — crime rate drops 23%",
+    "source": "NETWATCH",
+    "bias": 0.6,
+    "sentiment": 0.2,
+    "emotion": "pride"
+  },
+  {
+    "text": "Mandatory neural-link firmware update 4.7.2 patching critical vulnerability in dream-state logging",
+    "source": "NETWATCH",
+    "bias": 0.4,
+    "sentiment": -0.5,
+    "emotion": "urgency"
+  },
+  {
+    "text": "Anonymous cell leaks 2.3TB of corporate behavioral prediction data — mirror links inside",
+    "source": "DARKWIRE",
+    "bias": -0.6,
+    "sentiment": -0.3,
+    "emotion": "defiance"
+  },
+  {
+    "text": "How to flash your implant firmware without triggering the corporate killswitch",
+    "source": "DARKWIRE",
+    "bias": -0.7,
+    "sentiment": 0.1,
+    "emotion": "hope"
+  },
+  {
+    "text": "Three runners lost in the Shenzhen data corridor — signal last pinged near Zone 9 relay",
+    "source": "DARKWIRE",
+    "bias": -0.4,
+    "sentiment": -0.7,
+    "emotion": "grief"
+  },
+  {
+    "text": "New zero-day in NeuroSync v3 implants allows remote memory extraction — patch yourself NOW",
+    "source": "DARKWIRE",
+    "bias": -0.5,
+    "sentiment": -0.8,
+    "emotion": "fear"
+  },
+  {
+    "text": "Decentralized mesh protocol HYDRA v2.1 now supports quantum-resistant handshakes",
+    "source": "DARKWIRE",
+    "bias": -0.3,
+    "sentiment": 0.4,
+    "emotion": "hope"
+  },
+  {
+    "text": "Quantum processors achieve stable 4096-qubit entanglement at room temperature",
+    "source": "SCINET",
+    "bias": 0.1,
+    "sentiment": 0.5,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Lab-grown neural tissue interfaces directly with silicon for first time",
+    "source": "SCINET",
+    "bias": 0.0,
+    "sentiment": 0.3,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Atmospheric carbon capture drones deployed over Pacific dead zones show early promise",
+    "source": "SCINET",
+    "bias": 0.1,
+    "sentiment": 0.2,
+    "emotion": "hope"
+  },
+  {
+    "text": "Brain-computer interface latency drops below 2ms — approaching thought-speed interaction",
+    "source": "SCINET",
+    "bias": 0.0,
+    "sentiment": 0.4,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Synthetic blood substitute passes Phase III trials — universal donor compatibility confirmed",
+    "source": "SCINET",
+    "bias": 0.0,
+    "sentiment": 0.6,
+    "emotion": "hope"
+  },
+  {
+    "text": "BREAKING: Power grid collapse in Neo-Berlin district leaves 3 million in darkness",
+    "source": "CRASHFEED",
+    "bias": -0.2,
+    "sentiment": -0.8,
+    "emotion": "panic"
+  },
+  {
+    "text": "Rogue AI trading bot liquidates $4.2B in synthetic assets before kill command reaches it",
+    "source": "CRASHFEED",
+    "bias": -0.1,
+    "sentiment": -0.6,
+    "emotion": "shock"
+  },
+  {
+    "text": "Water riots enter third day in São Paulo megaplex — corporate security deploys sonic barriers",
+    "source": "CRASHFEED",
+    "bias": -0.3,
+    "sentiment": -0.9,
+    "emotion": "anger"
+  },
+  {
+    "text": "Autonomous delivery drone swarm malfunction causes 12-hour gridlock in downtown Shanghai",
+    "source": "CRASHFEED",
+    "bias": 0.0,
+    "sentiment": -0.5,
+    "emotion": "frustration"
+  },
+  {
+    "text": "FLASH: Unknown signal broadcast on all frequencies for 7 seconds — origin untraceable",
+    "source": "CRASHFEED",
+    "bias": 0.0,
+    "sentiment": -0.4,
+    "emotion": "mystery"
+  },
+  {
+    "text": "Coalition files lawsuit against mandatory emotion-tracking in public schools",
+    "source": "CIVILWATCH",
+    "bias": -0.4,
+    "sentiment": -0.3,
+    "emotion": "determination"
+  },
+  {
+    "text": "Report: 67% of gig workers have no legal protection against algorithmic termination",
+    "source": "CIVILWATCH",
+    "bias": -0.3,
+    "sentiment": -0.5,
+    "emotion": "concern"
+  },
+  {
+    "text": "Digital Rights Assembly demands transparency in predictive policing algorithms",
+    "source": "CIVILWATCH",
+    "bias": -0.4,
+    "sentiment": -0.2,
+    "emotion": "resolve"
+  },
+  {
+    "text": "Whistleblower reveals social credit scores being shared with private employers",
+    "source": "CIVILWATCH",
+    "bias": -0.5,
+    "sentiment": -0.6,
+    "emotion": "outrage"
+  },
+  {
+    "text": "Community mesh networks now serve 12% of disconnected populations in rural zones",
+    "source": "CIVILWATCH",
+    "bias": -0.2,
+    "sentiment": 0.3,
+    "emotion": "hope"
+  },
+  {
+    "text": "Inside the abandoned server farms where data nomads build their own internet",
+    "source": "FREEPRESS",
+    "bias": -0.2,
+    "sentiment": 0.1,
+    "emotion": "curiosity"
+  },
+  {
+    "text": "The last independent radio station in Neo-Tokyo broadcasts its final signal tonight",
+    "source": "FREEPRESS",
+    "bias": -0.3,
+    "sentiment": -0.7,
+    "emotion": "sorrow"
+  },
+  {
+    "text": "Investigation: How three megacorps control 89% of global communication infrastructure",
+    "source": "FREEPRESS",
+    "bias": -0.4,
+    "sentiment": -0.5,
+    "emotion": "concern"
+  },
+  {
+    "text": "Street medics adapt 3D-printed prosthetics for combat zone civilians",
+    "source": "FREEPRESS",
+    "bias": -0.2,
+    "sentiment": 0.2,
+    "emotion": "compassion"
+  },
+  {
+    "text": "Photo essay: Life in the vertical slums of the Lagos megastructure",
+    "source": "FREEPRESS",
+    "bias": -0.1,
+    "sentiment": -0.3,
+    "emotion": "empathy"
+  },
+  {
+    "text": "OmniCorp unveils Generation 7 neural implant with 340% faster synaptic bridging",
+    "source": "TECHPULSE",
+    "bias": 0.5,
+    "sentiment": 0.4,
+    "emotion": "excitement"
+  },
+  {
+    "text": "Smart city initiative transforms Mumbai corridor — crime down, efficiency up 45%",
+    "source": "TECHPULSE",
+    "bias": 0.6,
+    "sentiment": 0.5,
+    "emotion": "optimism"
+  },
+  {
+    "text": "Next-gen holographic displays enter mass production — $299 consumer units by Q3",
+    "source": "TECHPULSE",
+    "bias": 0.3,
+    "sentiment": 0.3,
+    "emotion": "excitement"
+  },
+  {
+    "text": "Autonomous construction drones complete 40-story tower in record 72 hours",
+    "source": "TECHPULSE",
+    "bias": 0.4,
+    "sentiment": 0.4,
+    "emotion": "pride"
+  },
+  {
+    "text": "Corporate wellness AI reduces employee burnout by 31% across pilot programs",
+    "source": "TECHPULSE",
+    "bias": 0.7,
+    "sentiment": 0.3,
+    "emotion": "satisfaction"
+  },
+  {
+    "text": "Post-quantum encryption standard ZK-LATTICE ratified by underground standards body",
+    "source": "CRYPTONODE",
+    "bias": -0.2,
+    "sentiment": 0.3,
+    "emotion": "relief"
+  },
+  {
+    "text": "WARNING: Side-channel attack on popular hardware wallets — cold storage compromised",
+    "source": "CRYPTONODE",
+    "bias": 0.0,
+    "sentiment": -0.7,
+    "emotion": "alarm"
+  },
+  {
+    "text": "Decentralized identity protocol reaches 50 million active users on darknet",
+    "source": "CRYPTONODE",
+    "bias": -0.3,
+    "sentiment": 0.2,
+    "emotion": "pride"
+  },
+  {
+    "text": "New steganographic encoding hides 4KB messages in ambient city noise recordings",
+    "source": "CRYPTONODE",
+    "bias": -0.2,
+    "sentiment": 0.3,
+    "emotion": "intrigue"
+  },
+  {
+    "text": "Blockchain-verified dead drops replace physical courier networks in contested zones",
+    "source": "CRYPTONODE",
+    "bias": -0.3,
+    "sentiment": 0.1,
+    "emotion": "neutral"
+  },
+  {
+    "text": "Analysis: Sleep pattern data from smart mattresses sold to insurance actuaries since 2024",
+    "source": "DATAMINE",
+    "bias": -0.3,
+    "sentiment": -0.5,
+    "emotion": "disgust"
+  },
+  {
+    "text": "Satellite imagery reveals 340 undocumented detention facilities across three continents",
+    "source": "DATAMINE",
+    "bias": -0.4,
+    "sentiment": -0.8,
+    "emotion": "horror"
+  },
+  {
+    "text": "Leaked dataset shows predictive arrest algorithms disproportionately target lower districts",
+    "source": "DATAMINE",
+    "bias": -0.5,
+    "sentiment": -0.6,
+    "emotion": "anger"
+  },
+  {
+    "text": "Traffic flow analysis exposes hidden supply routes for restricted biotech components",
+    "source": "DATAMINE",
+    "bias": -0.2,
+    "sentiment": -0.2,
+    "emotion": "intrigue"
+  },
+  {
+    "text": "Metadata correlation proves 12 supposedly independent news outlets share single editorial AI",
+    "source": "DATAMINE",
+    "bias": -0.4,
+    "sentiment": -0.4,
+    "emotion": "suspicion"
+  },
+  {
+    "text": "EVP patterns detected in decommissioned AI training clusters — researchers baffled",
+    "source": "GHOSTWIRE",
+    "bias": -0.1,
+    "sentiment": -0.3,
+    "emotion": "unease"
+  },
+  {
+    "text": "Users report shared dream sequences after NeuroSync update — coincidence or backdoor?",
+    "source": "GHOSTWIRE",
+    "bias": -0.3,
+    "sentiment": -0.5,
+    "emotion": "paranoia"
+  },
+  {
+    "text": "Abandoned orbital station transmitting prime number sequences — no registered operator",
+    "source": "GHOSTWIRE",
+    "bias": 0.0,
+    "sentiment": -0.2,
+    "emotion": "mystery"
+  },
+  {
+    "text": "Digital séance protocol claims to reconstruct personality from social media corpus",
+    "source": "GHOSTWIRE",
+    "bias": -0.1,
+    "sentiment": -0.4,
+    "emotion": "unease"
+  },
+  {
+    "text": "The signal in the static: three independent stations pick up identical anomalous broadcast",
+    "source": "GHOSTWIRE",
+    "bias": -0.1,
+    "sentiment": -0.3,
+    "emotion": "dread"
+  },
+  {
+    "text": "Megacorp merger creates entity controlling 40% of global cloud infrastructure",
+    "source": "FREEPRESS",
+    "bias": -0.4,
+    "sentiment": -0.5,
+    "emotion": "concern"
+  },
+  {
+    "text": "Underground clinics offer implant removal services as opt-out movement grows",
+    "source": "DARKWIRE",
+    "bias": -0.5,
+    "sentiment": 0.1,
+    "emotion": "defiance"
+  },
+  {
+    "text": "AI-generated propaganda floods local elections — deepfake detection fails 30% of the time",
+    "source": "CIVILWATCH",
+    "bias": -0.3,
+    "sentiment": -0.6,
+    "emotion": "alarm"
+  },
+  {
+    "text": "New synthetic drug DREAMDUST bypasses neural implant safety filters — 47 hospitalized",
+    "source": "CRASHFEED",
+    "bias": -0.1,
+    "sentiment": -0.7,
+    "emotion": "alarm"
+  },
+  {
+    "text": "Orbital solar farms beam first terawatt of energy to ground receivers — clean power milestone",
+    "source": "SCINET",
+    "bias": 0.1,
+    "sentiment": 0.6,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Corporate arcology in Singapore achieves full self-sufficiency — never needs outside resources",
+    "source": "TECHPULSE",
+    "bias": 0.5,
+    "sentiment": 0.4,
+    "emotion": "pride"
+  },
+  {
+    "text": "Pirate radio collective broadcasts encrypted resistance poetry across 14 districts",
+    "source": "DARKWIRE",
+    "bias": -0.6,
+    "sentiment": 0.2,
+    "emotion": "defiance"
+  },
+  {
+    "text": "ALERT: Coordinated DDoS takes down three major banking nodes — transactions frozen",
+    "source": "CRASHFEED",
+    "bias": 0.0,
+    "sentiment": -0.7,
+    "emotion": "panic"
+  },
+  {
+    "text": "Gene therapy black market thrives as corporate patents lock out 80% of population",
+    "source": "DATAMINE",
+    "bias": -0.4,
+    "sentiment": -0.5,
+    "emotion": "frustration"
+  },
+  {
+    "text": "Ambient surveillance microphones installed in public transit — recording starts Monday",
+    "source": "CIVILWATCH",
+    "bias": -0.5,
+    "sentiment": -0.6,
+    "emotion": "outrage"
+  },
+  {
+    "text": "Salvage crews recover pre-collapse server containing uncensored historical archives",
+    "source": "GHOSTWIRE",
+    "bias": -0.1,
+    "sentiment": 0.2,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Experimental brain-to-brain messaging tested between volunteers 4000km apart",
+    "source": "SCINET",
+    "bias": 0.0,
+    "sentiment": 0.3,
+    "emotion": "wonder"
+  },
+  {
+    "text": "Worker cooperative launches open-source alternative to proprietary neural firmware",
+    "source": "CRYPTONODE",
+    "bias": -0.4,
+    "sentiment": 0.5,
+    "emotion": "hope"
+  },
+  {
+    "text": "Automated border drones intercept 200 climate refugees at Mediterranean checkpoint",
+    "source": "FREEPRESS",
+    "bias": -0.3,
+    "sentiment": -0.8,
+    "emotion": "sorrow"
+  },
+  {
+    "text": "NETWATCH confirms zero-day in municipal water treatment SCADA systems — patch incoming",
+    "source": "NETWATCH",
+    "bias": 0.2,
+    "sentiment": -0.6,
+    "emotion": "urgency"
+  }
+]
